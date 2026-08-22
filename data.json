@@ -1,0 +1,70 @@
+{
+  "results": {
+    "文献笔记/读书笔记/sample-quiz.md::game-programming-patterns-001": {
+      "quizId": "game-programming-patterns-001",
+      "filePath": "文献笔记/读书笔记/sample-quiz.md",
+      "questions": {
+        "q001": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391564355
+        },
+        "q002": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391601531
+        },
+        "q003": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391630377
+        },
+        "q004": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391639081
+        },
+        "q005": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391646503
+        },
+        "q006": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391652695
+        },
+        "q007": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391657838
+        },
+        "q008": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391666285
+        },
+        "q009": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391682455
+        },
+        "q010": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787391689088
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+	"id": "omni-quiz",
+	"name": "Omni Quiz",
+	"version": "0.1.0",
+	"minAppVersion": "1.4.0",
+	"description": "Render interactive single-choice quizzes from Markdown quiz blocks and persist answer progress.",
+	"author": "Pavel",
+	"isDesktopOnly": false
+}
