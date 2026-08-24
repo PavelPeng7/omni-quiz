@@ -1,7 +1,7 @@
 {
 	"id": "omni-quiz",
 	"name": "Omni Quiz",
-	"version": "0.3.0",
+	"version": "0.3.1",
 	"minAppVersion": "1.4.0",
 	"description": "Browse, take, and analyze mixed-format quizzes stored in Markdown.",
 	"author": "Pavel",

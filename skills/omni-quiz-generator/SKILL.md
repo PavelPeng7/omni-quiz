@@ -1,104 +1,97 @@
 ---
 name: omni-quiz-generator
-description: Generate or update Obsidian quiz Markdown files that conform to the Omni Quiz `quiz` JSON fenced-block schema. Use this skill whenever the user asks to turn notes, articles, lessons, documentation, or pasted knowledge into a quiz, test, self-check, review exercise, or `*.quiz.md` file for Omni Quiz—even if they only say “出题”, “生成测试题”, “做个测验”, or “根据当前笔记检查学习效果”. Do not use it for implementing the plugin itself, unrelated surveys, or general question answering.
-compatibility: Requires local file read/write access and Node.js for deterministic validation. No network or authentication is needed.
+description: Generate or update Obsidian quiz Markdown files for the current Omni Quiz schema. Use when turning notes, articles, lessons, documentation, or pasted knowledge into a quiz, test, self-check, review exercise, or `*.quiz.md` file—even for short requests such as “出题”, “生成测试题”, or “做个测验”. Supports single-choice, multiple-choice, true/false, fill-in-the-blank, and L1–L4 cognitive levels. Do not use for implementing the plugin, unrelated surveys, or general question answering.
 ---
 
 # Omni Quiz document generator
 
-Create a focused single-choice quiz from user-provided source material. The generated Markdown is consumed directly by the Omni Quiz Obsidian plugin, so syntactic stability matters as much as question quality.
+Create grounded quiz Markdown that the current Omni Quiz plugin can consume directly. Prefer question quality and source fidelity over filling a requested quota.
 
-## Scope
+## Output boundary
 
-Generate only:
+Generate:
 
-- A normal Markdown file.
-- One `quiz` fenced block containing strict JSON.
-- Single-choice questions with one unambiguous correct option.
+- One normal Markdown file with exactly one `quiz` fenced block containing strict JSON.
+- Schema v2 (`"schemaVersion": 2`) for all new quizzes.
+- `quick` mode for a short, lightweight single-choice review when the user explicitly asks for it.
+- `standard` mode by default, using any suitable mix of `single`, `multiple`, `true_false`, and `fill_blank` questions.
+- A cognitive `level` of `L1`, `L2`, `L3`, or `L4` on every question.
 
-Do not add multiple-choice, true/false, fill-in-the-blank, short-answer, AI API, Anki, spaced repetition, dashboard, or answer-history fields. Do not modify the source note. User progress belongs to the plugin's `data.json`, never the generated Markdown.
+Do not add unsupported short-answer or essay types, AI/API fields, Anki or spaced-repetition fields, dashboard data, or answer-history fields. Do not modify source notes. User progress belongs in the plugin's `data.json`, never in quiz Markdown.
 
 ## Inputs and defaults
 
-1. Use the current note, explicitly named files, or pasted text as the knowledge source.
-2. If the user gives a source file but no destination, write beside it as `<source-stem>.quiz.md`.
-3. If the user provides only pasted content and asks for a file, use a clear kebab-case topic filename ending in `.quiz.md` in the current workspace.
+1. Use the current note, explicitly named files, or pasted text as the source.
+2. If a source file is given without a destination, write beside it as `<source-stem>.quiz.md`.
+3. For pasted content, use a clear kebab-case topic filename ending in `.quiz.md` in the current workspace.
 4. Default to 10 questions unless the user specifies a count.
-5. Default to 4 options per question. Use 2–6 only when the content genuinely supports that choice.
-6. Use the source language for the title, questions, options, explanations, and surrounding Markdown.
+5. In `standard` mode, choose question types for the content rather than enforcing a fixed distribution. Avoid near-duplicate questions added only to create variety.
+6. For `single` and `multiple`, default to 4 options; use 2–6 when that better fits the source.
+7. Use the source language throughout.
 
-When the requested destination could overwrite an existing file, inspect it first. Update it only if the user clearly requested regeneration or editing; otherwise choose a non-conflicting path or ask for direction.
+Inspect an existing destination before writing. Update it only when regeneration or editing is requested; otherwise avoid overwriting it.
 
 ## Workflow
 
-### 1. Read and bound the source
+### 1. Bound the source
 
-Read all source material needed for the requested quiz. Identify the central concepts, relationships, procedures, tradeoffs, and common misconceptions. If the material cannot support the requested number of distinct questions, generate fewer high-quality questions and state that constraint instead of inventing facts.
+Read the material needed for the quiz and identify its concepts, relationships, procedures, tradeoffs, and supported misconceptions. If it cannot support the requested number of distinct questions, generate fewer and report the limitation. Never invent facts to reach a count or difficulty target.
 
-### 2. Design grounded questions
+### 2. Design the assessment
 
-For each question:
+Assign levels by the thinking actually required:
 
-- Test information that is supported by the source.
-- Prefer understanding and application over trivial wording recall.
-- Ensure exactly one option is defensibly correct from the source.
-- Make distractors plausible but clearly wrong; avoid joke options and obvious length clues.
-- Avoid “all of the above”, “none of the above”, double negatives, and trick wording.
-- Keep each question independent enough to answer without reading another question.
-- Explain why the correct answer is correct. When useful, briefly distinguish it from the most tempting distractor.
+- `L1`: recall or recognize an explicit fact or term.
+- `L2`: explain, classify, compare, or apply a stated rule directly.
+- `L3`: analyze relationships, diagnose a scenario, or combine multiple source ideas.
+- `L4`: evaluate a tradeoff or transfer the material to a novel scenario with source-grounded criteria.
 
-Do not fabricate missing facts. If a useful inference is not explicitly stated, phrase the question so the inference follows directly from the provided material.
+Use higher levels only when the source supports them. A quiz may contain only a subset of levels.
 
-### 3. Assign stable IDs
+Choose each type deliberately:
 
-IDs preserve user progress when wording changes:
+- `single`: exactly one defensible option is correct.
+- `multiple`: two or more options are independently correct and the correct set is unambiguous. Do not use it merely to disguise a single-choice question.
+- `true_false`: the statement is precise and not a trivial wording trick.
+- `fill_blank`: the missing term is central and accepted variants can be enumerated. Avoid long free-form responses.
 
-- For a new quiz, use a descriptive kebab-case ID ending in `-001`, such as `game-loop-quiz-001`.
-- Use question IDs `q001`, `q002`, ... in document order.
-- Use option IDs `A`, `B`, `C`, ... in display order.
-- Within one quiz, every question ID must be unique and every option ID within a question must be unique.
-- When updating an existing quiz, preserve `quiz.id` and existing `question.id` values for semantically unchanged questions, even if wording or explanations improve.
-- Give a new question a new ID. Never recycle the ID of a removed question for a different concept.
+For option questions, make distractors plausible but clearly wrong from the source. Avoid joke options, obvious length clues, “all/none of the above”, double negatives, and inter-question dependencies. Explain the correct answer and, when useful, the tempting misconception. For fill blanks, include only genuinely equivalent accepted answers.
 
-### 4. Write the exact document shape
+### 3. Preserve identity
 
-Read [references/quiz-schema.md](references/quiz-schema.md) before creating or updating an output. Reuse [assets/quiz-template.md](assets/quiz-template.md) as the structural template.
+- New quiz IDs use descriptive kebab-case ending in `-001`, such as `game-loop-quiz-001`.
+- New question IDs use `q001`, `q002`, ... in document order.
+- Option IDs use `A`, `B`, `C`, ... in display order.
+- IDs must be unique in their scope.
+- When updating, preserve `quiz.id` and IDs of semantically unchanged questions. Assign a never-recycled ID to a genuinely new question.
 
-The fenced block must contain strict JSON accepted by `JSON.parse()`:
+The plugin keys progress by Markdown path plus `quiz.id`, then maps attempts by `question.id`; unnecessary ID changes disconnect learning history.
 
-- Use double quotes for all keys and strings.
-- Do not use comments, trailing commas, bare keys, YAML, or Markdown fences inside JSON strings.
-- Escape embedded quotes, backslashes, and control characters correctly.
-- Keep `answer` equal to one option `id`, not the option text.
-- Omit `explanation` only when the source genuinely provides no useful explanation.
-- Do not add answer-state fields such as `selectedAnswer`, `correct`, `attempts`, or `updatedAt`.
+### 4. Write Schema v2
 
-### 5. Validate before finishing
+Read [references/quiz-schema.md](references/quiz-schema.md) before creating or updating output. Reuse [assets/quiz-template.md](assets/quiz-template.md) as the structural template.
 
-Run the bundled validator against every generated quiz:
+The fenced block must be strict JSON accepted by `JSON.parse()`:
+
+- Use double quotes for keys and strings; no comments, trailing commas, YAML, or nested Markdown fences.
+- Escape quotes, backslashes, and control characters.
+- `single.answer` is one option ID.
+- `multiple.answer` is an array of unique option IDs.
+- `true_false.answer` is a JSON boolean, not a quoted string.
+- `fill_blank.answers` is a non-empty string array; `caseSensitive` is a boolean and defaults to `false` when omitted.
+- Set top-level `difficulty.min` and `difficulty.max` to the lowest and highest levels actually present, or omit `difficulty` when it adds no value.
+- Never write state fields such as `selectedAnswer`, `correct`, `attempts`, `answeredAt`, or `updatedAt`.
+
+### 5. Validate and review
+
+Run the bundled validator against every generated quiz, resolving the script path relative to this skill directory:
 
 ```powershell
 node scripts/validate-quiz.mjs "path/to/output.quiz.md"
 ```
 
-Resolve the script path relative to this Skill directory when invoked from another working directory. Fix every reported error and rerun until it prints a success result. Validation checks structure, IDs, answers, question count, frontmatter type, and the exact number of `quiz` blocks; it does not replace a semantic review.
-
-Then manually verify:
-
-- Every answer is supported by the source.
-- No question has multiple defensible answers.
-- Distractors are plausible and distinct.
-- Explanations are concise and do not introduce unsupported claims.
-- The requested question count and output path are correct.
+Fix every error and rerun until it reports success. Then manually verify grounding, answer uniqueness/completeness, level accuracy, concise explanations, requested count, and output path. Structural validation does not prove semantic quality.
 
 ## Completion response
 
-Report:
-
-- The created or updated file as a clickable absolute path.
-- The number of questions.
-- The quiz ID.
-- That structural validation passed.
-- Any source limitation that forced fewer questions or lower confidence.
-
-Do not paste the entire generated document into chat when a file was requested unless the user also asks to preview it.
+Report the clickable absolute output path, question count, quiz ID, mode, included question types and level range, and that validation passed. Mention any source limitation that forced fewer questions or lower confidence. Do not paste the whole document when a file was requested unless the user asks for a preview.

@@ -1,8 +1,8 @@
-# Omni Quiz Markdown protocol
+# Omni Quiz Schema v2 protocol
 
-## Document structure
+## Document shape
 
-Use one Markdown document with optional explanatory Markdown and exactly one `quiz` fenced code block. Recommended frontmatter:
+Use one Markdown document with optional surrounding Markdown and exactly one `quiz` fenced block. Recommended frontmatter:
 
 ```yaml
 ---
@@ -11,80 +11,85 @@ title: 测试标题
 ---
 ```
 
-The frontmatter `title` should match the JSON `title`. The validator requires `type: quiz` when frontmatter exists.
+When frontmatter exists, `type` must be `quiz`. Keep its title aligned with the JSON title.
 
-## JSON schema
+## Data model
 
 ```ts
+type QuizMode = "quick" | "standard";
+type CognitiveLevel = "L1" | "L2" | "L3" | "L4";
+
 interface QuizData {
-    id: string;
-    title: string;
-    questions: QuizQuestion[];
+  schemaVersion: 2;
+  id: string;
+  title: string;
+  mode: QuizMode;
+  difficulty?: { min: CognitiveLevel; max: CognitiveLevel };
+  questions: QuizQuestion[];
 }
 
-interface QuizQuestion {
-    id: string;
-    question: string;
-    options: QuizOption[];
-    answer: string;
-    explanation?: string;
+interface BaseQuestion {
+  id: string;
+  type: "single" | "multiple" | "true_false" | "fill_blank";
+  level: CognitiveLevel;
+  question: string;
+  explanation?: string;
+}
+
+interface SingleQuestion extends BaseQuestion {
+  type: "single";
+  options: QuizOption[];
+  answer: string;
+}
+
+interface MultipleQuestion extends BaseQuestion {
+  type: "multiple";
+  options: QuizOption[];
+  answer: string[];
+}
+
+interface TrueFalseQuestion extends BaseQuestion {
+  type: "true_false";
+  answer: boolean;
+}
+
+interface FillBlankQuestion extends BaseQuestion {
+  type: "fill_blank";
+  answers: string[];
+  caseSensitive?: boolean;
 }
 
 interface QuizOption {
-    id: string;
-    text: string;
+  id: string;
+  text: string;
 }
 ```
 
-Validation rules:
+## Structural invariants
 
-- `id`, `title`, `question`, option `id`, option `text`, and `answer` are non-empty strings.
-- `questions` contains at least one question.
-- Question IDs are unique within the quiz.
-- Every question contains at least two options.
-- Option IDs are unique within their question.
-- `answer` exactly matches one option ID.
+- All required string values are non-empty.
+- `questions` contains at least one item and question IDs are unique.
+- Every question declares `type` and `level` in Schema v2.
+- `single` and `multiple` have at least two options with unique IDs.
+- `single.answer` matches one option ID.
+- `multiple.answer` is non-empty, contains no duplicate IDs, and every ID exists in `options`. For generated content, prefer at least two correct answers.
+- `true_false.answer` is the JSON literal `true` or `false`.
+- `fill_blank.answers` contains at least one non-empty accepted answer. Matching trims surrounding whitespace and ignores case unless `caseSensitive` is `true`.
+- `difficulty`, when present, uses L1–L4 and `min` cannot be higher than `max`. Generated quizzes should make it match the actual level range.
 - `explanation`, when present, is a string.
-- Unknown fields are rejected so accidental progress fields and unsupported future question types cannot enter MVP files.
 
-## Persistence identity
+## Compatibility and persistence
 
-The plugin stores progress under:
+The plugin can still read legacy single-choice blocks without `schemaVersion`, `mode`, `type`, or `level`, defaulting them to Schema 1, `quick`, `single`, and `L1`. Do not generate legacy format; preserve it only when a user explicitly requires no migration.
+
+Progress identity is:
 
 ```text
-<Markdown source path>::<quiz.id>
+<Markdown source path>::<quiz.id> -> session -> question.id
 ```
 
-Each answer is matched by `question.id`. Preserve both IDs when editing equivalent quiz content. Changing the file path or quiz ID intentionally creates a separate progress namespace.
+Preserve the quiz ID and semantically stable question IDs during edits. Never put persisted attempts or correctness state in the Markdown.
 
-## Complete example
+## Complete mixed example
 
-````markdown
----
-type: quiz
-title: 游戏循环测试
----
-
-# 游戏循环测试
-
-```quiz
-{
-  "id": "game-loop-quiz-001",
-  "title": "游戏循环测试",
-  "questions": [
-    {
-      "id": "q001",
-      "question": "典型游戏循环持续执行哪组操作？",
-      "options": [
-        { "id": "A", "text": "输入、更新、渲染" },
-        { "id": "B", "text": "保存、上传、下载" },
-        { "id": "C", "text": "编译、链接、打包" },
-        { "id": "D", "text": "登录、认证、退出" }
-      ],
-      "answer": "A",
-      "explanation": "典型游戏循环反复处理输入、更新游戏状态并渲染画面。"
-    }
-  ]
-}
-```
-````
+See [../assets/quiz-template.md](../assets/quiz-template.md) for a ready-to-adapt Schema v2 document containing all four supported question types.
