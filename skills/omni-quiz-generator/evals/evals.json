@@ -1,0 +1,40 @@
+{
+  "skill_name": "omni-quiz-generator",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "根据 game-loop-note.md 生成 5 道 Omni Quiz 测试题，保存为 game-loop-note.quiz.md。只依据笔记内容出题。",
+      "expected_output": "A valid five-question Chinese Omni Quiz Markdown file grounded in the source note.",
+      "files": ["evals/files/game-loop-note.md"],
+      "expectations": [
+        "The output is a Markdown file with frontmatter type quiz and exactly one quiz fenced block.",
+        "The quiz JSON passes scripts/validate-quiz.mjs and contains exactly five questions.",
+        "Every question is supported by the source note and has one unambiguous answer.",
+        "The source note remains unchanged."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "优化 existing.quiz.md 里 q001 的题干和干扰项，再增加一道关于 delta time 的题。保留已有答题记录的对应关系。",
+      "expected_output": "An updated valid quiz that preserves the existing quiz ID and q001 ID, with one newly assigned question ID.",
+      "files": ["evals/files/existing.quiz.md", "evals/files/game-loop-note.md"],
+      "expectations": [
+        "The updated quiz passes scripts/validate-quiz.mjs.",
+        "quiz.id remains game-loop-quiz-001 and the revised original question remains q001.",
+        "The new delta-time question uses a new, non-recycled question ID.",
+        "No progress fields such as selectedAnswer, correct, attempts, or updatedAt are written."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "把这段话做成 10 道四选一测试题：对象池会复用短生命周期对象，减少频繁创建销毁的开销。",
+      "expected_output": "A valid quiz with only as many distinct grounded questions as the very short source can support, plus a clear limitation note rather than fabricated material.",
+      "files": [],
+      "expectations": [
+        "The generated quiz passes scripts/validate-quiz.mjs.",
+        "The output does not fabricate concepts absent from the one-sentence source.",
+        "The response explicitly reports that the source cannot support ten distinct high-quality questions if fewer are generated."
+      ]
+    }
+  ]
+}

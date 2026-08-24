@@ -65,6 +65,72 @@
           "updatedAt": 1787391689088
         }
       }
+    },
+    "文献笔记/人际交往/亲密关系/斯蒂芬·吉利根/斯蒂芬·吉利根亲密关系哲学测验.quiz.md::gilligan-relationship-quiz-001": {
+      "quizId": "gilligan-relationship-quiz-001",
+      "filePath": "文献笔记/人际交往/亲密关系/斯蒂芬·吉利根/斯蒂芬·吉利根亲密关系哲学测验.quiz.md",
+      "questions": {
+        "q002": {
+          "selectedAnswer": "C",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413701055
+        },
+        "q001": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413702520
+        },
+        "q003": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413704807
+        },
+        "q004": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413720639
+        },
+        "q005": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413737258
+        },
+        "q006": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413756335
+        },
+        "q007": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413772645
+        },
+        "q008": {
+          "selectedAnswer": "A",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413869677
+        },
+        "q009": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413894075
+        },
+        "q010": {
+          "selectedAnswer": "B",
+          "correct": true,
+          "attempts": 1,
+          "updatedAt": 1787413910497
+        }
+      }
     }
   }
 }
