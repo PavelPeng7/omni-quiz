@@ -1,76 +1,119 @@
 # Omni Quiz
 
-Omni Quiz 是一个最小化的 Obsidian 单选题插件。它把 Markdown 中的 `quiz` JSON 代码块渲染成可交互测试，并用 Obsidian 的插件数据保存答题状态。插件不会修改 Quiz Markdown，也不包含 AI、网络请求、题库或统计面板。
+Omni Quiz 把 Markdown 中的 `quiz` JSON 代码块渲染成可交互测验。它支持快速单选和混合题型标准测验，并在本地记录每次完整测验及每道题的全部尝试。插件不会修改 Quiz Markdown，也不依赖 AI 或网络请求。
 
-## 安装方法
+## 功能
 
-当前目录已经是一个 Vault 插件目录：
+- 单选、多选、判断和填空题
+- `L1`–`L4` 认知等级
+- 即时判定、答案解释和重新作答
+- 本次得分与首次正确率
+- 独立测验会话和完整尝试历史
+- 自动恢复旧版单选题和答题记录
+- 主页面板浏览整个知识库中的测试题
+- L1–L4 首次正确率、题型构成和测验进度可视化
+
+## 测试面板
+
+点击左侧 Ribbon 的柱状图图标，或从命令面板运行“打开测试面板”。面板会自动索引 Vault 中所有 Markdown `quiz` 代码块，并提供：
+
+- 测试题总数、题目总数、已测试数量和完成次数
+- 全局及 L1–L4 首次正确率
+- 单选、多选、判断和填空题分布
+- 按标题、Quiz ID 或文件路径搜索
+- Quick / Standard 模式筛选
+- 当前进度、最近活动和一键打开原笔记
+- 无效 Quiz block 与重复 Quiz ID 提示
+
+面板统计只关联知识库中仍然存在的题目。“首次正确率”按每次测验会话中每道题的第一次回答计算，重新作答不会覆盖薄弱点数据。
+
+## 安装和验证
+
+当前目录可直接作为 Vault 插件目录：
 
 ```text
 Vault/.obsidian/plugins/omni-quiz/
 ```
 
-开发构建：
-
 ```bash
 npm install
+npm test
 npm run build
 ```
 
-Obsidian 实际加载只需要下面三个文件：
+Obsidian 实际加载 `main.js`、`manifest.json` 和 `styles.css`。构建后重新加载 Obsidian 窗口即可载入新代码。
 
-```text
-main.js
-manifest.json
-styles.css
-```
-
-然后在 Obsidian 的“第三方插件”中重新加载并启用 **Omni Quiz**。若插件已启用，构建后可重新加载 Obsidian 窗口以载入新代码。
-
-## Markdown 示例
+## Schema v2 示例
 
 ````markdown
 ```quiz
 {
-  "id": "game-loop-001",
-  "title": "游戏循环测试",
+  "schemaVersion": 2,
+  "id": "state-pattern-001",
+  "title": "状态模式测试",
+  "mode": "standard",
+  "difficulty": { "min": "L1", "max": "L3" },
   "questions": [
     {
-      "id": "q001",
-      "question": "游戏循环通常会持续执行哪组操作？",
+      "id": "q1",
+      "type": "single",
+      "level": "L1",
+      "question": "状态模式主要解决什么问题？",
       "options": [
-        { "id": "A", "text": "输入、更新、渲染" },
-        { "id": "B", "text": "保存、上传、下载" }
+        { "id": "A", "text": "复杂状态分支" },
+        { "id": "B", "text": "资源加载" }
       ],
-      "answer": "A",
-      "explanation": "典型游戏循环不断执行输入处理、状态更新与画面渲染。"
+      "answer": "A"
+    },
+    {
+      "id": "q2",
+      "type": "multiple",
+      "level": "L2",
+      "question": "哪些情况适合考虑状态模式？",
+      "options": [
+        { "id": "A", "text": "行为随状态改变" },
+        { "id": "B", "text": "存在复杂条件分支" },
+        { "id": "C", "text": "读取静态配置" }
+      ],
+      "answer": ["A", "B"]
+    },
+    {
+      "id": "q3",
+      "type": "true_false",
+      "level": "L2",
+      "question": "状态模式与所有有限状态机完全等价。",
+      "answer": false
+    },
+    {
+      "id": "q4",
+      "type": "fill_blank",
+      "level": "L3",
+      "question": "将行为封装到独立的 _____ 对象中。",
+      "answers": ["状态", "State"],
+      "caseSensitive": false
     }
   ]
 }
 ```
 ````
 
-完整的 10 题文件见 `sample-quiz.md`。
+完整示例见 `sample-standard-quiz.md`。原有未声明 `schemaVersion`、`type` 和 `level` 的单选题仍然有效，默认按 `quick`、`single`、`L1` 解析。
 
-## 使用方式
+## 字段规则
 
-1. 让 AI 按上述 JSON 协议生成 Quiz Markdown。
-2. 在 Obsidian 中打开 Markdown，并切换到阅读视图或实时预览。
-3. 选择一个答案，然后点击“提交答案”。
-4. 查看正确/错误、正确答案和解释。
-5. 点击“重新作答”可修改答案；答题次数会累计。
-6. 再次打开笔记时，插件会按照 `文件路径::quiz.id` 和 `question.id` 恢复记录。
+| 题型 | 必需答案字段 | 说明 |
+| --- | --- | --- |
+| `single` | `answer: string` | 答案必须对应一个选项 ID |
+| `multiple` | `answer: string[]` | 必须选择完全相同的一组选项，顺序不影响判分 |
+| `true_false` | `answer: boolean` | 使用 JSON 布尔值 `true` 或 `false` |
+| `fill_blank` | `answers: string[]` | 任一答案匹配即正确；默认忽略大小写和首尾空格 |
 
-## 数据规则
+## 学习记录
 
 - Markdown 是题目内容的唯一来源。
-- 插件 `data.json` 是用户进度的唯一来源。
-- 保存记录使用 `quiz.id + question.id` 作为稳定标识；修改题干但保留 ID 时，历史记录会继续生效。
-- 从 Markdown 删除的题目不会参与统计，其旧记录在 MVP 中不会自动清理。
-
-## 验证
-
-```bash
-npm test
-npm run build
-```
+- 插件 `data.json` 是学习进度的唯一来源。
+- 记录以 `文件路径::quiz.id`、测验会话和 `question.id` 组织。
+- 重新作答会追加一次尝试，不会覆盖首次错误。
+- “首次正确率”按每题在当前会话中的第一次回答计算。
+- 点击“完成测验”后会锁定本次会话；“开始新测验”会创建独立记录。
+- 旧版数据会自动迁移，但旧格式只保存最后一次答案，因此无法还原升级前每次尝试的具体内容。
