@@ -56,11 +56,11 @@ export default class OmniQuizPlugin extends Plugin {
 	private async activateDashboard(): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(QUIZ_DASHBOARD_VIEW)[0];
 		if (existing) {
-			await this.app.workspace.revealLeaf(existing);
+			this.app.workspace.setActiveLeaf(existing, { focus: true });
 			return;
 		}
 		const leaf = this.app.workspace.getLeaf("tab");
 		await leaf.setViewState({ type: QUIZ_DASHBOARD_VIEW, active: true });
-		await this.app.workspace.revealLeaf(leaf);
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 	}
 }
