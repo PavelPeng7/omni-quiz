@@ -43,6 +43,13 @@ npm run build
 
 Obsidian 实际加载 `main.js`、`manifest.json` 和 `styles.css`。构建后重新加载 Obsidian 窗口即可载入新代码。
 
+工程开发请从 [`AGENTS.md`](AGENTS.md) 开始，架构边界见 [`ARCHITECTURE.md`](ARCHITECTURE.md)。标准验证入口：
+
+```bash
+./scripts/verify-quick.sh
+./scripts/verify-full.sh
+```
+
 ## Schema v2 示例
 
 ````markdown

@@ -5,7 +5,9 @@
 	"scripts": {
 		"build": "tsc --noEmit && node esbuild.config.mjs production",
 		"dev": "node esbuild.config.mjs --watch",
-		"test": "tsx --test test/*.test.ts"
+		"test": "tsx --test test/*.test.ts",
+		"verify:quick": "./scripts/verify-quick.sh",
+		"verify:full": "./scripts/verify-full.sh"
 	},
 	"devDependencies": {
 		"@types/node": "^24.0.0",
