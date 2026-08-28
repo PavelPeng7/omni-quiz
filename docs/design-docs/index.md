@@ -72,6 +72,16 @@ The bundled generator skill has a plain Node.js validator rather than importing 
 
 **Consequences:** Protocol validation is duplicated. The engineering harness treats synchronized schema changes as a required workflow step.
 
+## DD-008 — Review-first dashboard with note-derived topics
+
+**Status:** Accepted
+
+The dashboard opens on unresolved wrong answers, offers separate review/topic/library/statistics surfaces, and derives hierarchical topics from the source note's Obsidian tags. A question is unresolved only when its latest attempt across all sessions is wrong; navigation back to that question uses an in-memory coordinator.
+
+**Why:** Review actions should be reachable before aggregate reporting, while existing note tags provide useful organization without expanding the Quiz content schema or duplicating metadata in progress storage.
+
+**Consequences:** Topic changes refresh through the metadata cache and full catalog scan. Multiple Quiz blocks in one note share its topics. Direct question navigation is ephemeral and must degrade safely if the source Quiz or question no longer exists.
+
 ## Adding a design document
 
 Use a descriptive filename such as `incremental-vault-index.md` and include:

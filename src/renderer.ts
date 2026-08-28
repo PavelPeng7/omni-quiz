@@ -1,5 +1,6 @@
 import { MarkdownRenderChild } from "obsidian";
 import { evaluateAnswer, formatAnswer, formatCorrectAnswer } from "./evaluator";
+import type { QuizFocusCoordinator, QuizFocusTarget } from "./navigation";
 import type { QuizStorage } from "./storage";
 import type {
 	AnswerValue,
@@ -28,6 +29,7 @@ export class QuizRenderer extends MarkdownRenderChild {
 	private sessionId: string;
 	private sessionActionPending = false;
 	private saveError: string | null = null;
+	private focusedQuestionId: string | null = null;
 
 	constructor(
 		containerEl: HTMLElement,
@@ -35,6 +37,7 @@ export class QuizRenderer extends MarkdownRenderChild {
 		private readonly quizKey: string,
 		private readonly filePath: string,
 		private readonly storage: QuizStorage,
+		private readonly focusCoordinator: QuizFocusCoordinator,
 	) {
 		super(containerEl);
 		this.sessionId = storage.getOrCreateCurrentSession(
@@ -55,6 +58,9 @@ export class QuizRenderer extends MarkdownRenderChild {
 			this.handleClick(event);
 		});
 		this.render();
+		this.register(
+			this.focusCoordinator.subscribe((target) => this.handleFocusRequest(target)),
+		);
 	}
 
 	private getInput(event: Event): HTMLInputElement | null {
@@ -112,6 +118,48 @@ export class QuizRenderer extends MarkdownRenderChild {
 			void this.complete();
 		} else if (action === "restart") {
 			void this.restart();
+		} else if (action === "review" && questionId) {
+			void this.reviewQuestion(questionId);
+		}
+	}
+
+	private handleFocusRequest(target: QuizFocusTarget): boolean {
+		if (target.filePath !== this.filePath || target.quizId !== this.quiz.id) {
+			return false;
+		}
+		if (!this.quiz.questions.some((question) => question.id === target.questionId)) {
+			return false;
+		}
+		this.focusedQuestionId = target.questionId;
+		this.render();
+		this.focusQuestion(target.questionId);
+		return true;
+	}
+
+	private focusQuestion(questionId: string): void {
+		const questionEl = [...this.containerEl.querySelectorAll<HTMLElement>(
+			".quiz-question[data-question-id]",
+		)].find((element) => element.dataset.questionId === questionId);
+		if (!questionEl) return;
+		const viewWindow = this.containerEl.ownerDocument.defaultView;
+		const reduceMotion = viewWindow?.matchMedia(
+			"(prefers-reduced-motion: reduce)",
+		).matches;
+		questionEl.addClass("is-navigation-target");
+		questionEl.scrollIntoView({
+			block: "center",
+			behavior: reduceMotion ? "auto" : "smooth",
+		});
+		questionEl
+			.querySelector<HTMLElement>(
+				'button[data-action="retry"], button[data-action="review"], input:not(:disabled), button[data-action="submit"]',
+			)
+			?.focus({ preventScroll: true });
+		if (viewWindow) {
+			const timer = viewWindow.setTimeout(() => {
+				questionEl.removeClass("is-navigation-target");
+			}, 2200);
+			this.register(() => viewWindow.clearTimeout(timer));
 		}
 	}
 
@@ -185,6 +233,14 @@ export class QuizRenderer extends MarkdownRenderChild {
 	}
 
 	private async restart(): Promise<void> {
+		await this.startNewSession();
+	}
+
+	private async reviewQuestion(questionId: string): Promise<void> {
+		await this.startNewSession(questionId);
+	}
+
+	private async startNewSession(questionId?: string): Promise<void> {
 		if (this.sessionActionPending) return;
 		this.sessionActionPending = true;
 		this.saveError = null;
@@ -197,7 +253,9 @@ export class QuizRenderer extends MarkdownRenderChild {
 		this.drafts.clear();
 		this.editing.clear();
 		this.submittedThisSession.clear();
+		this.focusedQuestionId = questionId ?? null;
 		this.render();
+		if (questionId) this.focusQuestion(questionId);
 		try {
 			await result.persisted;
 		} catch (error) {
@@ -206,6 +264,7 @@ export class QuizRenderer extends MarkdownRenderChild {
 		} finally {
 			this.sessionActionPending = false;
 			this.render();
+			if (questionId) this.focusQuestion(questionId);
 		}
 	}
 
@@ -274,7 +333,10 @@ export class QuizRenderer extends MarkdownRenderChild {
 			? (this.drafts.get(question.id) ?? saved?.answer)
 			: (saved?.answer ?? this.drafts.get(question.id));
 
-		const questionEl = this.containerEl.createDiv({ cls: "quiz-question" });
+		const questionEl = this.containerEl.createDiv({
+			cls: "quiz-question",
+			attr: { "data-question-id": question.id },
+		});
 		const heading = questionEl.createDiv({ cls: "quiz-question-heading" });
 		heading.createEl("h4", {
 			cls: "quiz-question-title",
@@ -320,6 +382,16 @@ export class QuizRenderer extends MarkdownRenderChild {
 					},
 				});
 				retry.disabled = isPending;
+			} else if (this.focusedQuestionId === question.id) {
+				questionEl.createEl("button", {
+					cls: "quiz-retry",
+					text: "重做此题",
+					attr: {
+						type: "button",
+						"data-action": "review",
+						"data-question-id": question.id,
+					},
+				});
 			}
 		} else if (!isCompleted) {
 			const submit = questionEl.createEl("button", {

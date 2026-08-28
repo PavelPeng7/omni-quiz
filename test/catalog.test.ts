@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractQuizCatalog } from "../src/catalog";
+import { extractQuizCatalog, normalizeTopicTags } from "../src/catalog";
 
 const validBlock = `
 \`\`\`quiz
@@ -23,11 +23,27 @@ const validBlock = `
 `;
 
 test("extracts quiz blocks and builds stable vault keys", () => {
-	const catalog = extractQuizCatalog("Notes/test.md", validBlock);
+	const catalog = extractQuizCatalog("Notes/test.md", validBlock, [
+		"#开发/TypeScript",
+	]);
 	assert.equal(catalog.errors.length, 0);
 	assert.equal(catalog.entries.length, 1);
 	assert.equal(catalog.entries[0]?.quizKey, "Notes/test.md::quiz-1");
 	assert.equal(catalog.entries[0]?.blockIndex, 1);
+	assert.deepEqual(catalog.entries[0]?.topics, ["开发/TypeScript"]);
+});
+
+test("normalizes, deduplicates, and sorts note tags", () => {
+	assert.deepEqual(
+		normalizeTopicTags([
+			"#开发/TypeScript",
+			"开发/TypeScript",
+			" #学习 ",
+			"#开发//Web",
+			"#",
+		]),
+		["学习", "开发/TypeScript", "开发/Web"],
+	);
 });
 
 test("reports malformed quiz blocks without dropping valid siblings", () => {

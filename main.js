@@ -30,6 +30,7 @@ var import_obsidian = require("obsidian");
 
 // src/analytics.ts
 var LEVELS = ["L1", "L2", "L3", "L4"];
+var UNCATEGORIZED_TOPIC = "\u672A\u5206\u7C7B";
 function percentage(correct, answered) {
   return answered === 0 ? null : Math.round(correct / answered * 100);
 }
@@ -76,22 +77,90 @@ function getLatestActivity(history) {
   }
   return latest;
 }
-function buildDashboardAnalytics(entries, histories) {
+function getQuestionAttempts(history, questionId) {
+  return (history?.sessions ?? []).flatMap((session) => session.answers[questionId] ?? []).sort((left, right) => left.answeredAt - right.answeredAt);
+}
+function expandTopicPaths(topics) {
+  if (topics.length === 0) return [UNCATEGORIZED_TOPIC];
+  const paths = /* @__PURE__ */ new Set();
+  for (const topic of topics) {
+    const segments = topic.split("/").filter(Boolean);
+    for (let index = 1; index <= segments.length; index += 1) {
+      paths.add(segments.slice(0, index).join("/"));
+    }
+  }
+  return [...paths];
+}
+function getOrCreateTopic(topics, path) {
+  const existing = topics.get(path);
+  if (existing) return existing;
+  const segments = path.split("/");
+  const topic = {
+    path,
+    label: path === UNCATEGORIZED_TOPIC ? path : segments.join(" \u203A "),
+    depth: path === UNCATEGORIZED_TOPIC ? 0 : segments.length - 1,
+    quizKeys: /* @__PURE__ */ new Set(),
+    questionCount: 0,
+    wrongQuestionCount: 0,
+    answeredCount: 0,
+    correctCount: 0,
+    accuracy: null
+  };
+  topics.set(path, topic);
+  return topic;
+}
+function startOfLocalWeek(timestamp) {
+  const date = new Date(timestamp);
+  const day = date.getDay();
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - (day === 0 ? 6 : day - 1));
+  return date.getTime();
+}
+function createWeeklyTrend(now) {
+  const currentWeek = new Date(startOfLocalWeek(now));
+  const result = [];
+  for (let offset = 7; offset >= 0; offset -= 1) {
+    const week = new Date(currentWeek);
+    week.setDate(week.getDate() - offset * 7);
+    result.push({
+      weekStart: week.getTime(),
+      answeredCount: 0,
+      correctCount: 0,
+      accuracy: null
+    });
+  }
+  return result;
+}
+function buildDashboardAnalytics(entries, histories, now = Date.now()) {
   const levels = createLevelAnalytics();
   const types = createTypeCounts();
   const quizzes = {};
+  const wrongQuestions = [];
+  const topicMap = /* @__PURE__ */ new Map();
+  const weeklyTrend = createWeeklyTrend(now);
+  const trendByWeek = new Map(weeklyTrend.map((point) => [point.weekStart, point]));
   let questionCount = 0;
   let answeredCount = 0;
   let correctCount = 0;
   let attemptedQuizCount = 0;
   let completedSessionCount = 0;
+  let incompleteQuizCount = 0;
+  let latestActivityAt = null;
   for (const entry of entries) {
     const history = histories[entry.quizKey];
-    const current = getSessionAccuracy(getCurrentSession(history), entry);
+    const currentSession = getCurrentSession(history);
+    const current = getSessionAccuracy(currentSession, entry);
+    const topicPaths = expandTopicPaths(entry.topics);
     let quizAnswered = 0;
     let quizCorrect = 0;
     let totalAttemptCount = 0;
+    let quizWrongQuestionCount = 0;
     questionCount += entry.quiz.questions.length;
+    for (const topicPath of topicPaths) {
+      const topic = getOrCreateTopic(topicMap, topicPath);
+      topic.quizKeys.add(entry.quizKey);
+      topic.questionCount += entry.quiz.questions.length;
+    }
     for (const question of entry.quiz.questions) {
       levels[question.level].questionCount += 1;
       types[question.type] += 1;
@@ -104,16 +173,59 @@ function buildDashboardAnalytics(entries, histories) {
         quizAnswered += 1;
         answeredCount += 1;
         levels[question.level].answeredCount += 1;
-        if (attempts[0]?.correct) {
+        for (const topicPath of topicPaths) {
+          getOrCreateTopic(topicMap, topicPath).answeredCount += 1;
+        }
+        const firstAttempt = attempts[0];
+        if (firstAttempt?.correct) {
           quizCorrect += 1;
           correctCount += 1;
           levels[question.level].correctCount += 1;
+          for (const topicPath of topicPaths) {
+            getOrCreateTopic(topicMap, topicPath).correctCount += 1;
+          }
+        }
+        if (firstAttempt) {
+          const trendPoint = trendByWeek.get(startOfLocalWeek(firstAttempt.answeredAt));
+          if (trendPoint) {
+            trendPoint.answeredCount += 1;
+            if (firstAttempt.correct) trendPoint.correctCount += 1;
+          }
         }
       }
     }
+    for (const question of entry.quiz.questions) {
+      const attempts = getQuestionAttempts(history, question.id);
+      const latestAttempt = attempts.at(-1);
+      if (!latestAttempt || latestAttempt.correct) continue;
+      const wrongAttemptCount = attempts.filter((attempt) => !attempt.correct).length;
+      wrongQuestions.push({
+        quizKey: entry.quizKey,
+        filePath: entry.filePath,
+        quizId: entry.quiz.id,
+        quizTitle: entry.quiz.title,
+        questionId: question.id,
+        question: question.question,
+        type: question.type,
+        level: question.level,
+        topics: entry.topics,
+        wrongAttemptCount,
+        lastWrongAt: latestAttempt.answeredAt
+      });
+      quizWrongQuestionCount += 1;
+      for (const topicPath of topicPaths) {
+        getOrCreateTopic(topicMap, topicPath).wrongQuestionCount += 1;
+      }
+    }
     const completed = history?.sessions.filter((session) => session.completedAt !== void 0).length ?? 0;
+    const isInProgress = currentSession?.completedAt === void 0 && current.answeredCount > 0;
+    const quizLatestActivity = getLatestActivity(history);
     completedSessionCount += completed;
+    if (isInProgress) incompleteQuizCount += 1;
     if (totalAttemptCount > 0) attemptedQuizCount += 1;
+    if (quizLatestActivity !== null) {
+      latestActivityAt = Math.max(latestActivityAt ?? quizLatestActivity, quizLatestActivity);
+    }
     quizzes[entry.quizKey] = {
       quizKey: entry.quizKey,
       completedSessionCount: completed,
@@ -121,7 +233,9 @@ function buildDashboardAnalytics(entries, histories) {
       currentAnsweredCount: current.answeredCount,
       currentAccuracy: current.accuracy,
       firstAccuracy: percentage(quizCorrect, quizAnswered),
-      latestActivityAt: getLatestActivity(history)
+      latestActivityAt: quizLatestActivity,
+      wrongQuestionCount: quizWrongQuestionCount,
+      isInProgress
     };
   }
   for (const level of LEVELS) {
@@ -130,17 +244,42 @@ function buildDashboardAnalytics(entries, histories) {
       levels[level].answeredCount
     );
   }
+  for (const point of weeklyTrend) {
+    point.accuracy = percentage(point.correctCount, point.answeredCount);
+  }
+  wrongQuestions.sort(
+    (left, right) => right.wrongAttemptCount - left.wrongAttemptCount || right.lastWrongAt - left.lastWrongAt || left.question.localeCompare(right.question)
+  );
+  const topics = [...topicMap.values()].map((topic) => ({
+    path: topic.path,
+    label: topic.label,
+    depth: topic.depth,
+    quizCount: topic.quizKeys.size,
+    questionCount: topic.questionCount,
+    wrongQuestionCount: topic.wrongQuestionCount,
+    answeredCount: topic.answeredCount,
+    correctCount: topic.correctCount,
+    accuracy: percentage(topic.correctCount, topic.answeredCount)
+  })).sort(
+    (left, right) => right.wrongQuestionCount - left.wrongQuestionCount || (left.accuracy ?? 101) - (right.accuracy ?? 101) || left.label.localeCompare(right.label)
+  );
   return {
     quizCount: entries.length,
     questionCount,
     attemptedQuizCount,
     completedSessionCount,
+    incompleteQuizCount,
+    wrongQuestionCount: wrongQuestions.length,
+    latestActivityAt,
     answeredCount,
     correctCount,
     accuracy: percentage(correctCount, answeredCount),
     levels,
     types,
-    quizzes
+    quizzes,
+    wrongQuestions,
+    topics,
+    weeklyTrend
   };
 }
 
@@ -321,7 +460,15 @@ function parseQuiz(source) {
 
 // src/catalog.ts
 var QUIZ_BLOCK_PATTERN = /^```quiz[\t ]*\r?\n([\s\S]*?)^```[\t ]*$/gm;
-function extractQuizCatalog(filePath, markdown) {
+function normalizeTopicTags(tags) {
+  const normalized = /* @__PURE__ */ new Set();
+  for (const tag of tags) {
+    const topic = tag.trim().replace(/^#+/, "").split("/").map((segment) => segment.trim()).filter(Boolean).join("/");
+    if (topic) normalized.add(topic);
+  }
+  return [...normalized].sort((left, right) => left.localeCompare(right));
+}
+function extractQuizCatalog(filePath, markdown, topics = []) {
   const entries = [];
   const errors = [];
   let blockIndex = 0;
@@ -334,6 +481,7 @@ function extractQuizCatalog(filePath, markdown) {
         quizKey: `${filePath}::${quiz.id}`,
         filePath,
         blockIndex,
+        topics: normalizeTopicTags(topics),
         quiz
       });
     } catch (error) {
@@ -346,7 +494,7 @@ function extractQuizCatalog(filePath, markdown) {
   }
   return { entries, errors };
 }
-async function scanQuizCatalog(app) {
+async function scanQuizCatalog(app, getTopics) {
   const entries = [];
   const errors = [];
   const seenKeys = /* @__PURE__ */ new Set();
@@ -362,7 +510,7 @@ async function scanQuizCatalog(app) {
       });
       continue;
     }
-    const result = extractQuizCatalog(file.path, source);
+    const result = extractQuizCatalog(file.path, source, getTopics(file));
     for (const entry of result.entries) {
       if (seenKeys.has(entry.quizKey)) {
         errors.push({
@@ -378,6 +526,39 @@ async function scanQuizCatalog(app) {
     errors.push(...result.errors);
   }
   return { entries, errors };
+}
+
+// src/library.ts
+function filterQuizCatalogEntries(entries, analytics, filters) {
+  const query = filters.query.trim().toLowerCase();
+  return entries.filter((entry) => {
+    const quiz = analytics[entry.quizKey];
+    if (filters.mode !== "all" && entry.quiz.mode !== filters.mode) return false;
+    if (filters.topic !== "all" && !expandTopicPaths(entry.topics).includes(filters.topic)) return false;
+    if (filters.status === "not_started" && (quiz?.totalAttemptCount ?? 0) > 0) return false;
+    if (filters.status === "in_progress" && !quiz?.isInProgress) return false;
+    if (filters.status === "completed" && (quiz?.completedSessionCount ?? 0) === 0) return false;
+    if (filters.status === "wrong" && (quiz?.wrongQuestionCount ?? 0) === 0) return false;
+    return query.length === 0 || [
+      entry.quiz.title,
+      entry.quiz.id,
+      entry.filePath,
+      ...entry.topics,
+      ...entry.topics.map((topic) => topic.split("/").join(" \u203A "))
+    ].some((value) => value.toLowerCase().includes(query));
+  }).sort((left, right) => compareEntries(left, right, analytics, filters.sort));
+}
+function compareEntries(left, right, analytics, sort) {
+  const leftAnalytics = analytics[left.quizKey];
+  const rightAnalytics = analytics[right.quizKey];
+  if (sort === "wrong") {
+    return (rightAnalytics?.wrongQuestionCount ?? 0) - (leftAnalytics?.wrongQuestionCount ?? 0) || (rightAnalytics?.latestActivityAt ?? 0) - (leftAnalytics?.latestActivityAt ?? 0);
+  }
+  if (sort === "accuracy") {
+    return (leftAnalytics?.firstAccuracy ?? 101) - (rightAnalytics?.firstAccuracy ?? 101) || left.quiz.title.localeCompare(right.quiz.title);
+  }
+  if (sort === "title") return left.quiz.title.localeCompare(right.quiz.title);
+  return (rightAnalytics?.latestActivityAt ?? 0) - (leftAnalytics?.latestActivityAt ?? 0) || left.quiz.title.localeCompare(right.quiz.title);
 }
 
 // src/dashboard.ts
@@ -400,6 +581,10 @@ var ACTIVITY_DATE_FORMATTER = new Intl.DateTimeFormat(void 0, {
   month: "short",
   day: "numeric"
 });
+var WEEK_DATE_FORMATTER = new Intl.DateTimeFormat(void 0, {
+  month: "numeric",
+  day: "numeric"
+});
 function formatAccuracy(value) {
   return value === null ? "\u2014" : `${value}%`;
 }
@@ -407,21 +592,31 @@ function formatActivity(value) {
   if (value === null) return "\u5C1A\u672A\u5F00\u59CB";
   return ACTIVITY_DATE_FORMATTER.format(value);
 }
+function displayTopic(topic) {
+  return topic.split("/").join(" \u203A ");
+}
 var QuizDashboardView = class extends import_obsidian.ItemView {
-  constructor(leaf, storage) {
+  constructor(leaf, storage, focusCoordinator) {
     super(leaf);
     this.storage = storage;
-    this.icon = "bar-chart-3";
+    this.focusCoordinator = focusCoordinator;
+    this.icon = "library-big";
     this.navigation = false;
     this.addAction("refresh-cw", "\u5237\u65B0\u6D4B\u8BD5\u9898\u7D22\u5F15", () => {
       void this.reloadCatalog();
     });
   }
   storage;
+  focusCoordinator;
   catalog = { entries: [], errors: [] };
   analytics = buildDashboardAnalytics([], {});
+  activeSection = "review";
   query = "";
   modeFilter = "all";
+  statusFilter = "all";
+  sortOption = "recent";
+  topicFilter = "all";
+  showAllWrong = false;
   scanVersion = 0;
   refreshTimer = null;
   loading = true;
@@ -434,15 +629,9 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
   }
   async onOpen() {
     this.contentEl.addClass("omni-quiz-dashboard");
-    this.registerDomEvent(this.contentEl, "input", (event) => {
-      this.handleInput(event);
-    });
-    this.registerDomEvent(this.contentEl, "change", (event) => {
-      this.handleChange(event);
-    });
-    this.registerDomEvent(this.contentEl, "click", (event) => {
-      this.handleClick(event);
-    });
+    this.registerDomEvent(this.contentEl, "input", (event) => this.handleInput(event));
+    this.registerDomEvent(this.contentEl, "change", (event) => this.handleChange(event));
+    this.registerDomEvent(this.contentEl, "click", (event) => this.handleClick(event));
     const refreshForFile = (file) => {
       if (file instanceof import_obsidian.TFile && file.extension === "md") {
         this.scheduleCatalogReload();
@@ -452,11 +641,8 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
     this.registerEvent(this.app.vault.on("modify", refreshForFile));
     this.registerEvent(this.app.vault.on("delete", refreshForFile));
     this.registerEvent(this.app.vault.on("rename", refreshForFile));
-    this.register(
-      this.storage.onChange(() => {
-        this.render();
-      })
-    );
+    this.registerEvent(this.app.metadataCache.on("changed", refreshForFile));
+    this.register(this.storage.onChange(() => this.render()));
     this.register(() => {
       const viewWindow = this.contentEl.ownerDocument.defaultView;
       if (viewWindow && this.refreshTimer !== null) {
@@ -485,36 +671,62 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
     const input = this.getInput(event);
     if (!input || input.dataset.role !== "quiz-search") return;
     this.query = input.value;
-    this.renderLibrary();
+    this.renderLibraryResults();
   }
   handleChange(event) {
     const selectType = this.contentEl.ownerDocument.defaultView?.HTMLSelectElement;
     if (!selectType || !(event.target instanceof selectType)) return;
-    if (event.target.dataset.role !== "mode-filter") return;
-    if (event.target.value === "all" || event.target.value === "quick" || event.target.value === "standard") {
-      this.modeFilter = event.target.value;
-      this.renderLibrary();
-    }
+    const { role } = event.target.dataset;
+    if (role === "mode-filter") this.modeFilter = event.target.value;
+    else if (role === "status-filter") this.statusFilter = event.target.value;
+    else if (role === "sort-option") this.sortOption = event.target.value;
+    else if (role === "topic-filter") this.topicFilter = event.target.value;
+    else return;
+    this.renderLibraryResults();
   }
   handleClick(event) {
     const elementType = this.contentEl.ownerDocument.defaultView?.Element;
     if (!elementType || !(event.target instanceof elementType)) return;
     const button = event.target.closest("button[data-action]");
     if (!button || !this.contentEl.contains(button)) return;
-    if (button.dataset.action === "open-quiz" && button.dataset.filePath) {
+    const action = button.dataset.action;
+    if (action === "switch-section" && button.dataset.section) {
+      this.activeSection = button.dataset.section;
+      this.render();
+    } else if (action === "open-quiz" && button.dataset.filePath) {
       void this.openQuizFile(button.dataset.filePath);
-    } else if (button.dataset.action === "refresh") {
+    } else if (action === "focus-question" && button.dataset.filePath && button.dataset.quizId && button.dataset.questionId) {
+      void this.openQuizFile(button.dataset.filePath, {
+        filePath: button.dataset.filePath,
+        quizId: button.dataset.quizId,
+        questionId: button.dataset.questionId
+      });
+    } else if (action === "select-topic" && button.dataset.topic) {
+      this.topicFilter = button.dataset.topic;
+      this.activeSection = "library";
+      this.render();
+    } else if (action === "show-all-wrong") {
+      this.showAllWrong = true;
+      this.render();
+    } else if (action === "refresh") {
       void this.reloadCatalog();
-    } else if (button.dataset.action === "clear-filters") {
-      this.query = "";
-      this.modeFilter = "all";
+    } else if (action === "clear-filters") {
+      this.resetFilters();
       this.render();
     }
   }
-  async openQuizFile(filePath) {
+  resetFilters() {
+    this.query = "";
+    this.modeFilter = "all";
+    this.statusFilter = "all";
+    this.sortOption = "recent";
+    this.topicFilter = "all";
+  }
+  async openQuizFile(filePath, focus) {
     const file = this.app.vault.getAbstractFileByPath(filePath);
     if (!(file instanceof import_obsidian.TFile)) return;
     await this.app.workspace.getLeaf("tab").openFile(file);
+    if (focus) this.focusCoordinator.request(focus);
   }
   async reloadCatalog() {
     const version = ++this.scanVersion;
@@ -522,7 +734,10 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
     this.loadError = null;
     this.render();
     try {
-      const catalog = await scanQuizCatalog(this.app);
+      const catalog = await scanQuizCatalog(this.app, (file) => {
+        const cache = this.app.metadataCache.getFileCache(file);
+        return cache ? (0, import_obsidian.getAllTags)(cache) ?? [] : [];
+      });
       if (version !== this.scanVersion) return;
       this.catalog = catalog;
     } catch (error) {
@@ -538,8 +753,15 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
   }
   render() {
     this.contentEl.empty();
+    if (!this.loading && !this.loadError) {
+      this.analytics = buildDashboardAnalytics(
+        this.catalog.entries,
+        this.storage.getHistories()
+      );
+    }
     const shell = this.contentEl.createDiv({ cls: "quiz-dashboard-shell" });
     this.renderHero(shell);
+    this.renderNavigation(shell);
     if (this.loading) {
       this.renderStatus(shell, "\u6B63\u5728\u7D22\u5F15\u77E5\u8BC6\u5E93\u4E2D\u7684\u6D4B\u8BD5\u9898\u2026", false);
       return;
@@ -548,23 +770,47 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
       this.renderStatus(shell, this.loadError, true);
       return;
     }
-    this.analytics = buildDashboardAnalytics(
-      this.catalog.entries,
-      this.storage.getHistories()
-    );
-    this.renderOverview(shell, this.analytics);
-    this.renderKnowledgeSignal(shell, this.analytics);
+    if (this.activeSection === "review") this.renderReview(shell);
+    else if (this.activeSection === "topics") this.renderTopics(shell);
+    else if (this.activeSection === "library") this.renderLibrary(shell);
+    else this.renderStatistics(shell);
     this.renderCatalogWarnings(shell);
-    this.renderControls(shell);
-    this.renderLibrary();
   }
   renderHero(parent) {
     const hero = parent.createEl("header", { cls: "quiz-dashboard-hero" });
-    hero.createDiv({ cls: "quiz-dashboard-eyebrow", text: "Knowledge signal" });
-    hero.createEl("h1", { text: "\u77E5\u8BC6\u6D4B\u91CF\u53F0" });
-    hero.createEl("p", {
-      text: "\u6D4F\u89C8\u77E5\u8BC6\u5E93\u4E2D\u7684\u6D4B\u8BD5\u9898\uFF0C\u89C2\u5BDF\u54EA\u4E9B\u77E5\u8BC6\u771F\u6B63\u7ECF\u5F97\u8D77\u7B2C\u4E00\u6B21\u56DE\u7B54\u3002"
+    const copy = hero.createDiv();
+    copy.createDiv({ cls: "quiz-dashboard-eyebrow", text: "Review index" });
+    copy.createEl("h1", { text: "\u77E5\u8BC6\u590D\u4E60\u53F0" });
+    copy.createEl("p", {
+      text: "\u4ECE\u5C1A\u672A\u638C\u63E1\u7684\u9898\u76EE\u51FA\u53D1\uFF0C\u6CBF\u7740\u4E3B\u9898\u7D22\u5F15\u56DE\u5230\u77E5\u8BC6\u539F\u6587\u3002"
     });
+    const status = hero.createDiv({ cls: "quiz-dashboard-hero-status" });
+    status.createSpan({ text: "\u6700\u8FD1\u5B66\u4E60" });
+    status.createEl("strong", { text: formatActivity(this.analytics.latestActivityAt) });
+  }
+  renderNavigation(parent) {
+    const nav = parent.createEl("nav", {
+      cls: "quiz-dashboard-nav",
+      attr: { "aria-label": "\u77E5\u8BC6\u590D\u4E60\u53F0" }
+    });
+    const sections = [
+      ["review", "\u590D\u4E60", "\u5C1A\u672A\u638C\u63E1"],
+      ["topics", "\u4E3B\u9898", "\u77E5\u8BC6\u7D22\u5F15"],
+      ["library", "\u9898\u5E93", "\u5168\u90E8\u6D4B\u8BD5"],
+      ["statistics", "\u7EDF\u8BA1", "\u5B66\u4E60\u4FE1\u53F7"]
+    ];
+    for (const [section, label, detail] of sections) {
+      const button = nav.createEl("button", {
+        attr: {
+          type: "button",
+          "data-action": "switch-section",
+          "data-section": section,
+          ...this.activeSection === section ? { "aria-current": "page" } : {}
+        }
+      });
+      button.createEl("strong", { text: label });
+      button.createSpan({ text: detail });
+    }
   }
   renderStatus(parent, message, showRetry) {
     const status = parent.createDiv({ cls: "quiz-dashboard-status" });
@@ -576,118 +822,211 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
       });
     }
   }
-  renderOverview(parent, analytics) {
-    const section = parent.createEl("section", {
-      cls: "quiz-dashboard-overview",
-      attr: { "aria-label": "\u5B66\u4E60\u6982\u89C8" }
+  renderReview(parent) {
+    const summary = parent.createEl("section", {
+      cls: "quiz-review-summary",
+      attr: { "aria-label": "\u590D\u4E60\u6982\u89C8" }
     });
-    this.renderMetric(section, "\u6D4B\u8BD5\u9898", String(analytics.quizCount), "\u4EFD");
-    this.renderMetric(section, "\u9898\u76EE", String(analytics.questionCount), "\u9053");
-    this.renderMetric(
-      section,
-      "\u5DF2\u6D4B\u8BD5",
-      String(analytics.attemptedQuizCount),
-      `/ ${analytics.quizCount}`
+    const wrong = summary.createDiv({ cls: "quiz-review-number is-wrong" });
+    wrong.createSpan({ text: "\u5F85\u590D\u4E60" });
+    wrong.createEl("strong", { text: String(this.analytics.wrongQuestionCount) });
+    wrong.createEl("small", { text: "\u9053\u6700\u65B0\u4F5C\u7B54\u4ECD\u9519\u8BEF\u7684\u9898" });
+    const progress = summary.createDiv({ cls: "quiz-review-number" });
+    progress.createSpan({ text: "\u7EE7\u7EED\u6D4B\u8BD5" });
+    progress.createEl("strong", { text: String(this.analytics.incompleteQuizCount) });
+    progress.createEl("small", { text: "\u4EFD\u5C1A\u672A\u5B8C\u6210\u7684\u6D4B\u8BD5" });
+    const grid = parent.createDiv({ cls: "quiz-review-grid" });
+    const queue = grid.createEl("section", { cls: "quiz-review-queue" });
+    this.renderSectionHeading(
+      queue,
+      "\u9519\u9898\u7D22\u5F15",
+      this.analytics.wrongQuestionCount === 0 ? "\u5F53\u524D\u6CA1\u6709\u5F85\u590D\u4E60\u9898" : "\u5148\u5904\u7406\u53CD\u590D\u51FA\u9519\u7684\u77E5\u8BC6"
     );
-    this.renderMetric(
-      section,
-      "\u9996\u6B21\u6B63\u786E\u7387",
-      formatAccuracy(analytics.accuracy),
-      `${analytics.completedSessionCount} \u6B21\u5B8C\u6210`
-    );
+    const wrongLimit = this.showAllWrong ? 100 : 5;
+    this.renderWrongQuestions(queue, this.analytics.wrongQuestions.slice(0, wrongLimit));
+    if (!this.showAllWrong && this.analytics.wrongQuestionCount > 5) {
+      queue.createEl("button", {
+        cls: "quiz-text-action",
+        text: `\u67E5\u770B\u5168\u90E8 ${this.analytics.wrongQuestionCount} \u9053\u9519\u9898`,
+        attr: { type: "button", "data-action": "show-all-wrong" }
+      });
+    }
+    const aside = grid.createEl("aside", { cls: "quiz-review-aside" });
+    this.renderContinueList(aside);
+    this.renderWeakTopics(aside, this.analytics.topics.slice(0, 4));
+    this.renderMiniTrend(aside);
   }
-  renderMetric(parent, label, value, detail) {
-    const metric = parent.createDiv({ cls: "quiz-dashboard-metric" });
-    metric.createDiv({ cls: "quiz-dashboard-metric-label", text: label });
-    metric.createDiv({ cls: "quiz-dashboard-metric-value", text: value });
-    metric.createDiv({ cls: "quiz-dashboard-metric-detail", text: detail });
-  }
-  renderKnowledgeSignal(parent, analytics) {
-    const section = parent.createEl("section", { cls: "quiz-dashboard-signal" });
-    const heading = section.createDiv({ cls: "quiz-dashboard-section-heading" });
-    heading.createEl("h2", { text: "\u8BA4\u77E5\u5C42\u7EA7" });
-    heading.createEl("p", { text: "\u6309\u6BCF\u6B21\u6D4B\u9A8C\u7684\u9996\u6B21\u56DE\u7B54\u8BA1\u7B97" });
-    const track = section.createDiv({ cls: "quiz-level-track" });
-    for (const level of LEVELS3) {
-      const item = track.createDiv({ cls: "quiz-level-segment" });
-      const title = item.createDiv({ cls: "quiz-level-title" });
-      title.createEl("strong", { text: level });
-      title.createSpan({ text: formatAccuracy(analytics.levels[level].accuracy) });
-      item.createEl("progress", {
+  renderWrongQuestions(parent, questions) {
+    if (questions.length === 0) {
+      const empty = parent.createDiv({ cls: "quiz-library-empty" });
+      empty.createEl("h3", { text: "\u9519\u9898\u5DF2\u7ECF\u6E05\u7A7A" });
+      empty.createEl("p", { text: "\u65B0\u7684\u9519\u8BEF\u4F1A\u81EA\u52A8\u51FA\u73B0\u5728\u8FD9\u91CC\uFF1B\u7B54\u5BF9\u540E\u4F1A\u81EA\u52A8\u79FB\u9664\u3002" });
+      return;
+    }
+    const list = parent.createDiv({ cls: "quiz-wrong-list" });
+    for (const item of questions) {
+      const card = list.createEl("article", { cls: "quiz-wrong-card" });
+      const body = card.createDiv({ cls: "quiz-wrong-card-body" });
+      const meta = body.createDiv({ cls: "quiz-card-meta" });
+      meta.createSpan({ text: item.quizTitle });
+      meta.createSpan({ text: item.level });
+      meta.createSpan({ text: TYPE_LABELS[item.type] });
+      body.createEl("h3", { text: item.question });
+      const details = body.createDiv({ cls: "quiz-wrong-details" });
+      details.createSpan({ text: `\u9519\u8BEF ${item.wrongAttemptCount} \u6B21` });
+      details.createSpan({ text: formatActivity(item.lastWrongAt) });
+      for (const topic of item.topics.slice(0, 2)) {
+        details.createSpan({ text: displayTopic(topic) });
+      }
+      card.createEl("button", {
+        text: "\u5B9A\u4F4D\u539F\u9898",
         attr: {
-          max: "100",
-          value: String(analytics.levels[level].accuracy ?? 0),
-          "aria-label": `${level} \u9996\u6B21\u6B63\u786E\u7387`
+          type: "button",
+          "data-action": "focus-question",
+          "data-file-path": item.filePath,
+          "data-quiz-id": item.quizId,
+          "data-question-id": item.questionId
         }
       });
-      item.createDiv({
-        cls: "quiz-level-detail",
-        text: `${analytics.levels[level].questionCount} \u9053\u9898 \xB7 ${analytics.levels[level].answeredCount} \u6B21\u56DE\u7B54`
-      });
     }
-    const typePanel = section.createDiv({ cls: "quiz-type-distribution" });
-    typePanel.createEl("h3", { text: "\u9898\u578B\u6784\u6210" });
-    for (const type of QUESTION_TYPES2) {
-      const row = typePanel.createDiv({ cls: "quiz-type-row" });
-      const label = row.createDiv({ cls: "quiz-type-label" });
-      label.createSpan({ text: TYPE_LABELS[type] });
-      label.createSpan({ text: String(analytics.types[type]) });
-      row.createEl("progress", {
+  }
+  renderContinueList(parent) {
+    const section = parent.createEl("section", { cls: "quiz-aside-panel" });
+    this.renderSectionHeading(section, "\u7EE7\u7EED\u6D4B\u8BD5", `${this.analytics.incompleteQuizCount} \u4EFD\u8FDB\u884C\u4E2D`);
+    const entries = this.catalog.entries.filter((entry) => this.analytics.quizzes[entry.quizKey]?.isInProgress).sort(
+      (left, right) => (this.analytics.quizzes[right.quizKey]?.latestActivityAt ?? 0) - (this.analytics.quizzes[left.quizKey]?.latestActivityAt ?? 0)
+    ).slice(0, 3);
+    if (entries.length === 0) {
+      section.createEl("p", { cls: "quiz-muted-copy", text: "\u6CA1\u6709\u8FDB\u884C\u4E2D\u7684\u6D4B\u8BD5\u3002" });
+      return;
+    }
+    for (const entry of entries) {
+      const item = section.createEl("button", {
+        cls: "quiz-continue-item",
         attr: {
-          max: String(Math.max(analytics.questionCount, 1)),
-          value: String(analytics.types[type]),
-          "aria-label": `${TYPE_LABELS[type]}\u9898\u6570\u91CF`
+          type: "button",
+          "data-action": "open-quiz",
+          "data-file-path": entry.filePath
         }
       });
-    }
-  }
-  renderCatalogWarnings(parent) {
-    if (this.catalog.errors.length === 0) return;
-    const warning = parent.createEl("details", { cls: "quiz-catalog-warning" });
-    warning.createEl("summary", {
-      text: `${this.catalog.errors.length} \u4E2A Quiz block \u672A\u80FD\u52A0\u5165\u7D22\u5F15`
-    });
-    const list = warning.createEl("ul");
-    for (const error of this.catalog.errors.slice(0, 20)) {
-      list.createEl("li", {
-        text: `${error.filePath} \xB7 \u7B2C ${error.blockIndex} \u4E2A\uFF1A${error.message}`
+      item.createEl("strong", { text: entry.quiz.title });
+      item.createSpan({
+        text: `${this.analytics.quizzes[entry.quizKey]?.currentAnsweredCount ?? 0} / ${entry.quiz.questions.length}`
       });
     }
   }
-  renderControls(parent) {
-    const section = parent.createEl("section", { cls: "quiz-library-section" });
-    const heading = section.createDiv({ cls: "quiz-dashboard-section-heading" });
-    heading.createEl("h2", { text: "\u6D4B\u8BD5\u9898\u5E93" });
-    heading.createEl("p", { text: `${this.catalog.entries.length} \u4EFD\u53EF\u7528\u6D4B\u8BD5` });
-    const controls = section.createDiv({ cls: "quiz-library-controls" });
-    const searchLabel = controls.createEl("label", { cls: "quiz-search-field" });
-    searchLabel.createSpan({ text: "\u641C\u7D22" });
-    searchLabel.createEl("input", {
-      type: "search",
-      value: this.query,
+  renderWeakTopics(parent, topics) {
+    const section = parent.createEl("section", { cls: "quiz-aside-panel" });
+    this.renderSectionHeading(section, "\u8584\u5F31\u4E3B\u9898", "\u6309\u5F85\u590D\u4E60\u9898\u6392\u5E8F");
+    if (topics.length === 0) {
+      section.createEl("p", { cls: "quiz-muted-copy", text: "\u6DFB\u52A0\u7B14\u8BB0\u6807\u7B7E\u540E\u4F1A\u5EFA\u7ACB\u4E3B\u9898\u7D22\u5F15\u3002" });
+      return;
+    }
+    for (const topic of topics) {
+      const button = section.createEl("button", {
+        cls: "quiz-topic-row",
+        attr: {
+          type: "button",
+          "data-action": "select-topic",
+          "data-topic": topic.path
+        }
+      });
+      button.createSpan({ text: topic.label });
+      button.createEl("strong", { text: `${topic.wrongQuestionCount} \xB7 ${formatAccuracy(topic.accuracy)}` });
+    }
+  }
+  renderMiniTrend(parent) {
+    const section = parent.createEl("section", { cls: "quiz-aside-panel" });
+    this.renderSectionHeading(section, "\u8FD1 8 \u5468", "\u9996\u6B21\u56DE\u7B54\u6B63\u786E\u7387");
+    this.renderTrendChart(section, true);
+  }
+  renderTopics(parent) {
+    const section = parent.createEl("section", { cls: "quiz-dashboard-section" });
+    this.renderSectionHeading(section, "\u4E3B\u9898\u7D22\u5F15", `${this.analytics.topics.length} \u4E2A\u4E3B\u9898\u8DEF\u5F84`);
+    section.createEl("p", {
+      cls: "quiz-section-intro",
+      text: "\u4E3B\u9898\u6765\u81EA\u7B14\u8BB0\u6807\u7B7E\u3002\u5D4C\u5957\u6807\u7B7E\u540C\u65F6\u6C47\u603B\u5230\u7236\u7EA7\uFF0C\u70B9\u51FB\u540E\u67E5\u770B\u8BE5\u4E3B\u9898\u4E0B\u7684\u6D4B\u8BD5\u3002"
+    });
+    const grid = section.createDiv({ cls: "quiz-topic-grid" });
+    for (const topic of this.analytics.topics) this.renderTopicCard(grid, topic);
+  }
+  renderTopicCard(parent, topic) {
+    const card = parent.createEl("button", {
+      cls: "quiz-topic-card",
       attr: {
-        placeholder: "\u6807\u9898\u3001\u6587\u4EF6\u8DEF\u5F84\u6216 Quiz ID",
-        "data-role": "quiz-search"
+        type: "button",
+        "data-action": "select-topic",
+        "data-topic": topic.path
       }
     });
-    const filterLabel = controls.createEl("label", { cls: "quiz-filter-field" });
-    filterLabel.createSpan({ text: "\u6A21\u5F0F" });
-    const select = filterLabel.createEl("select", {
-      attr: { "data-role": "mode-filter" }
-    });
-    select.createEl("option", { text: "\u5168\u90E8", value: "all" });
-    select.createEl("option", { text: "\u5FEB\u901F\u6D4B\u9A8C", value: "quick" });
-    select.createEl("option", { text: "\u6807\u51C6\u6D4B\u9A8C", value: "standard" });
-    select.value = this.modeFilter;
-    section.createDiv({ cls: "quiz-library-results" });
+    card.createSpan({ cls: "quiz-topic-depth", text: topic.depth === 0 ? "\u4E3B\u9898" : `\u5C42\u7EA7 ${topic.depth + 1}` });
+    card.createEl("h3", { text: topic.label });
+    const facts = card.createDiv({ cls: "quiz-topic-facts" });
+    facts.createSpan({ text: `${topic.quizCount} \u4EFD\u6D4B\u8BD5` });
+    facts.createSpan({ text: `${topic.questionCount} \u9053\u9898` });
+    facts.createSpan({ text: `${topic.wrongQuestionCount} \u9053\u5F85\u590D\u4E60` });
+    const signal = card.createDiv({ cls: "quiz-topic-signal" });
+    signal.createSpan({ text: "\u9996\u6B21\u6B63\u786E\u7387" });
+    signal.createEl("strong", { text: formatAccuracy(topic.accuracy) });
   }
-  renderLibrary() {
-    const results = this.contentEl.querySelector(
-      ".quiz-library-results"
+  renderLibrary(parent) {
+    const section = parent.createEl("section", { cls: "quiz-library-section" });
+    this.renderSectionHeading(section, "\u6D4B\u8BD5\u9898\u5E93", `${this.catalog.entries.length} \u4EFD\u53EF\u7528\u6D4B\u8BD5`);
+    const controls = section.createDiv({ cls: "quiz-library-controls" });
+    this.renderSearchControl(controls);
+    this.renderSelectControl(controls, "\u6A21\u5F0F", "mode-filter", this.modeFilter, [
+      ["all", "\u5168\u90E8\u6A21\u5F0F"],
+      ["quick", "\u5FEB\u901F\u6D4B\u9A8C"],
+      ["standard", "\u6807\u51C6\u6D4B\u9A8C"]
+    ]);
+    this.renderSelectControl(controls, "\u72B6\u6001", "status-filter", this.statusFilter, [
+      ["all", "\u5168\u90E8\u72B6\u6001"],
+      ["not_started", "\u672A\u5F00\u59CB"],
+      ["in_progress", "\u8FDB\u884C\u4E2D"],
+      ["completed", "\u5DF2\u5B8C\u6210"],
+      ["wrong", "\u6709\u5F85\u590D\u4E60\u9898"]
+    ]);
+    this.renderTopicControl(controls);
+    this.renderSelectControl(controls, "\u6392\u5E8F", "sort-option", this.sortOption, [
+      ["recent", "\u6700\u8FD1\u5B66\u4E60"],
+      ["wrong", "\u5F85\u590D\u4E60\u4F18\u5148"],
+      ["accuracy", "\u6B63\u786E\u7387\uFF08\u4F4E\u5230\u9AD8\uFF09"],
+      ["title", "\u6807\u9898"]
+    ]);
+    section.createDiv({ cls: "quiz-library-results" });
+    this.renderLibraryResults();
+  }
+  renderSearchControl(parent) {
+    const label = parent.createEl("label", { cls: "quiz-search-field" });
+    label.createSpan({ text: "\u641C\u7D22" });
+    label.createEl("input", {
+      type: "search",
+      value: this.query,
+      attr: { placeholder: "\u6807\u9898\u3001\u8DEF\u5F84\u3001Quiz ID \u6216\u4E3B\u9898", "data-role": "quiz-search" }
+    });
+  }
+  renderSelectControl(parent, labelText, role, value, options) {
+    const label = parent.createEl("label", { cls: "quiz-filter-field" });
+    label.createSpan({ text: labelText });
+    const select = label.createEl("select", { attr: { "data-role": role } });
+    for (const [optionValue, text] of options) select.createEl("option", { value: optionValue, text });
+    select.value = value;
+  }
+  renderTopicControl(parent) {
+    const topics = [...this.analytics.topics].sort((left, right) => left.label.localeCompare(right.label));
+    this.renderSelectControl(
+      parent,
+      "\u4E3B\u9898",
+      "topic-filter",
+      this.topicFilter,
+      [["all", "\u5168\u90E8\u4E3B\u9898"], ...topics.map((topic) => [topic.path, topic.label])]
     );
+  }
+  renderLibraryResults() {
+    const results = this.contentEl.querySelector(".quiz-library-results");
     if (!results) return;
     results.empty();
-    const entries = this.getFilteredEntries(this.analytics.quizzes);
+    const entries = this.getFilteredEntries();
     if (entries.length === 0) {
       const empty = results.createDiv({ cls: "quiz-library-empty" });
       empty.createEl("h3", {
@@ -704,60 +1043,48 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
       }
       return;
     }
+    results.createDiv({ cls: "quiz-library-result-count", text: `${entries.length} \u4EFD\u6D4B\u8BD5` });
     const list = results.createDiv({ cls: "quiz-library-list" });
     for (const entry of entries.slice(0, 100)) {
       this.renderQuizCard(list, entry, this.analytics.quizzes[entry.quizKey]);
     }
     if (entries.length > 100) {
-      results.createDiv({
-        cls: "quiz-library-limit",
-        text: `\u5F53\u524D\u663E\u793A\u524D 100 \u4EFD\uFF0C\u8BF7\u4F7F\u7528\u641C\u7D22\u7F29\u5C0F ${entries.length} \u4EFD\u7ED3\u679C\u3002`
-      });
+      results.createDiv({ cls: "quiz-library-limit", text: `\u5F53\u524D\u663E\u793A\u524D 100 \u4EFD\uFF0C\u8BF7\u7F29\u5C0F ${entries.length} \u4EFD\u7ED3\u679C\u3002` });
     }
   }
-  getFilteredEntries(analytics) {
-    const query = this.query.trim().toLowerCase();
-    return this.catalog.entries.filter((entry) => {
-      if (this.modeFilter !== "all" && entry.quiz.mode !== this.modeFilter) {
-        return false;
-      }
-      return query.length === 0 || entry.quiz.title.toLowerCase().includes(query) || entry.quiz.id.toLowerCase().includes(query) || entry.filePath.toLowerCase().includes(query);
-    }).sort((left, right) => {
-      const leftActivity = analytics[left.quizKey]?.latestActivityAt ?? 0;
-      const rightActivity = analytics[right.quizKey]?.latestActivityAt ?? 0;
-      return rightActivity - leftActivity || left.quiz.title.localeCompare(right.quiz.title);
+  getFilteredEntries() {
+    return filterQuizCatalogEntries(this.catalog.entries, this.analytics.quizzes, {
+      query: this.query,
+      mode: this.modeFilter,
+      status: this.statusFilter,
+      topic: this.topicFilter,
+      sort: this.sortOption
     });
   }
   renderQuizCard(parent, entry, analytics) {
     const card = parent.createEl("article", { cls: "quiz-library-card" });
+    if ((analytics?.wrongQuestionCount ?? 0) > 0) card.addClass("has-wrong");
     const body = card.createDiv({ cls: "quiz-library-card-body" });
     const tags = body.createDiv({ cls: "quiz-library-card-tags" });
-    tags.createSpan({
-      cls: "quiz-badge",
-      text: entry.quiz.mode === "standard" ? "\u6807\u51C6\u6D4B\u9A8C" : "\u5FEB\u901F\u6D4B\u9A8C"
-    });
+    tags.createSpan({ cls: "quiz-badge", text: entry.quiz.mode === "standard" ? "\u6807\u51C6\u6D4B\u9A8C" : "\u5FEB\u901F\u6D4B\u9A8C" });
     if (entry.quiz.difficulty) {
-      tags.createSpan({
-        cls: "quiz-badge",
-        text: `${entry.quiz.difficulty.min}\u2013${entry.quiz.difficulty.max}`
-      });
+      tags.createSpan({ cls: "quiz-badge", text: `${entry.quiz.difficulty.min}\u2013${entry.quiz.difficulty.max}` });
     }
+    for (const topic of entry.topics.slice(0, 2)) tags.createSpan({ cls: "quiz-badge", text: displayTopic(topic) });
+    if (entry.topics.length > 2) tags.createSpan({ cls: "quiz-badge", text: `+${entry.topics.length - 2}` });
     body.createEl("h3", { text: entry.quiz.title });
     body.createDiv({ cls: "quiz-library-path", text: entry.filePath });
     const facts = body.createDiv({ cls: "quiz-library-facts" });
     facts.createSpan({ text: `${entry.quiz.questions.length} \u9053\u9898` });
-    facts.createSpan({
-      text: `${analytics?.completedSessionCount ?? 0} \u6B21\u5B8C\u6210`
-    });
-    facts.createSpan({
-      text: `\u9996\u6B21\u6B63\u786E\u7387 ${formatAccuracy(analytics?.firstAccuracy ?? null)}`
-    });
+    facts.createSpan({ text: `${analytics?.completedSessionCount ?? 0} \u6B21\u5B8C\u6210` });
+    facts.createSpan({ text: `\u9996\u6B21\u6B63\u786E\u7387 ${formatAccuracy(analytics?.firstAccuracy ?? null)}` });
+    if ((analytics?.wrongQuestionCount ?? 0) > 0) {
+      facts.createEl("strong", { text: `${analytics?.wrongQuestionCount} \u9053\u5F85\u590D\u4E60` });
+    }
     const progress = card.createDiv({ cls: "quiz-library-card-progress" });
-    const progressLabel = progress.createDiv({ cls: "quiz-library-progress-label" });
-    progressLabel.createSpan({ text: "\u5F53\u524D\u8FDB\u5EA6" });
-    progressLabel.createSpan({
-      text: `${analytics?.currentAnsweredCount ?? 0} / ${entry.quiz.questions.length}`
-    });
+    const label = progress.createDiv({ cls: "quiz-library-progress-label" });
+    label.createSpan({ text: analytics?.isInProgress ? "\u5F53\u524D\u8FDB\u5EA6" : "\u6700\u8FD1\u8FDB\u5EA6" });
+    label.createSpan({ text: `${analytics?.currentAnsweredCount ?? 0} / ${entry.quiz.questions.length}` });
     progress.createEl("progress", {
       attr: {
         max: String(entry.quiz.questions.length),
@@ -765,19 +1092,130 @@ var QuizDashboardView = class extends import_obsidian.ItemView {
         "aria-label": `${entry.quiz.title} \u5F53\u524D\u8FDB\u5EA6`
       }
     });
-    progress.createDiv({
-      cls: "quiz-library-activity",
-      text: formatActivity(analytics?.latestActivityAt ?? null)
-    });
+    progress.createDiv({ cls: "quiz-library-activity", text: formatActivity(analytics?.latestActivityAt ?? null) });
     card.createEl("button", {
       cls: "quiz-library-open",
-      text: "\u6253\u5F00\u6D4B\u8BD5",
-      attr: {
-        type: "button",
-        "data-action": "open-quiz",
-        "data-file-path": entry.filePath
-      }
+      text: analytics?.isInProgress ? "\u7EE7\u7EED\u6D4B\u8BD5" : "\u6253\u5F00\u6D4B\u8BD5",
+      attr: { type: "button", "data-action": "open-quiz", "data-file-path": entry.filePath }
     });
+  }
+  renderStatistics(parent) {
+    const section = parent.createEl("section", { cls: "quiz-dashboard-section" });
+    this.renderSectionHeading(section, "\u5B66\u4E60\u7EDF\u8BA1", "\u5F53\u524D\u9898\u5E93\u4E0E\u5386\u53F2\u9996\u6B21\u56DE\u7B54");
+    const overview = section.createDiv({ cls: "quiz-dashboard-overview" });
+    this.renderMetric(overview, "\u6D4B\u8BD5\u9898", String(this.analytics.quizCount), "\u4EFD");
+    this.renderMetric(overview, "\u9898\u76EE", String(this.analytics.questionCount), "\u9053");
+    this.renderMetric(overview, "\u5DF2\u5B8C\u6210", String(this.analytics.completedSessionCount), "\u6B21\u4F1A\u8BDD");
+    this.renderMetric(overview, "\u9996\u6B21\u6B63\u786E\u7387", formatAccuracy(this.analytics.accuracy), `${this.analytics.answeredCount} \u6B21\u56DE\u7B54`);
+    this.renderMetric(overview, "\u5F85\u590D\u4E60", String(this.analytics.wrongQuestionCount), "\u9053\u9898");
+    this.renderKnowledgeSignal(section);
+    const lower = section.createDiv({ cls: "quiz-statistics-lower" });
+    const trend = lower.createEl("section", { cls: "quiz-statistics-panel" });
+    this.renderSectionHeading(trend, "\u8FD1 8 \u5468\u8D8B\u52BF", "\u67F1\u9AD8\u4E3A\u56DE\u7B54\u91CF\uFF0C\u586B\u5145\u4E3A\u6B63\u786E\u7387");
+    this.renderTrendChart(trend, false);
+    const topics = lower.createEl("section", { cls: "quiz-statistics-panel" });
+    this.renderSectionHeading(topics, "\u8584\u5F31\u4E3B\u9898", "\u5F85\u590D\u4E60\u6570 \xB7 \u9996\u6B21\u6B63\u786E\u7387");
+    this.renderWeakTopicTable(topics);
+  }
+  renderMetric(parent, label, value, detail) {
+    const metric = parent.createDiv({ cls: "quiz-dashboard-metric" });
+    metric.createDiv({ cls: "quiz-dashboard-metric-label", text: label });
+    metric.createDiv({ cls: "quiz-dashboard-metric-value", text: value });
+    metric.createDiv({ cls: "quiz-dashboard-metric-detail", text: detail });
+  }
+  renderKnowledgeSignal(parent) {
+    const signal = parent.createDiv({ cls: "quiz-dashboard-signal" });
+    const levels = signal.createEl("section", { cls: "quiz-level-panel" });
+    this.renderSectionHeading(levels, "\u8BA4\u77E5\u5C42\u7EA7", "\u9996\u6B21\u56DE\u7B54\u6B63\u786E\u7387");
+    const track = levels.createDiv({ cls: "quiz-level-track" });
+    for (const level of LEVELS3) {
+      const item = track.createDiv({ cls: "quiz-level-segment" });
+      const title = item.createDiv({ cls: "quiz-level-title" });
+      title.createEl("strong", { text: level });
+      title.createSpan({ text: formatAccuracy(this.analytics.levels[level].accuracy) });
+      item.createEl("progress", {
+        attr: { max: "100", value: String(this.analytics.levels[level].accuracy ?? 0), "aria-label": `${level} \u9996\u6B21\u6B63\u786E\u7387` }
+      });
+      item.createDiv({ cls: "quiz-level-detail", text: `${this.analytics.levels[level].questionCount} \u9053\u9898 \xB7 ${this.analytics.levels[level].answeredCount} \u6B21\u56DE\u7B54` });
+    }
+    const types = signal.createEl("section", { cls: "quiz-type-distribution" });
+    types.createEl("h3", { text: "\u9898\u578B\u6784\u6210" });
+    for (const type of QUESTION_TYPES2) {
+      const row = types.createDiv({ cls: "quiz-type-row" });
+      const label = row.createDiv({ cls: "quiz-type-label" });
+      label.createSpan({ text: TYPE_LABELS[type] });
+      label.createSpan({ text: String(this.analytics.types[type]) });
+      row.createEl("progress", {
+        attr: { max: String(Math.max(this.analytics.questionCount, 1)), value: String(this.analytics.types[type]), "aria-label": `${TYPE_LABELS[type]}\u9898\u6570\u91CF` }
+      });
+    }
+  }
+  renderTrendChart(parent, compact) {
+    const maxAnswers = Math.max(...this.analytics.weeklyTrend.map((point) => point.answeredCount), 1);
+    const chart = parent.createDiv({ cls: compact ? "quiz-trend-chart is-compact" : "quiz-trend-chart" });
+    for (const point of this.analytics.weeklyTrend) {
+      const column = chart.createDiv({ cls: "quiz-trend-column" });
+      const value = column.createDiv({ cls: "quiz-trend-value", text: point.answeredCount === 0 ? "\u2014" : formatAccuracy(point.accuracy) });
+      value.setAttr("aria-hidden", "true");
+      const bar = column.createDiv({ cls: "quiz-trend-bar" });
+      bar.style.setProperty("--quiz-trend-volume", `${Math.round(point.answeredCount / maxAnswers * 100)}%`);
+      const accuracy = bar.createDiv({ cls: "quiz-trend-accuracy" });
+      accuracy.style.setProperty("--quiz-trend-accuracy", `${point.accuracy ?? 0}%`);
+      bar.setAttr("role", "img");
+      bar.setAttr("aria-label", `${WEEK_DATE_FORMATTER.format(point.weekStart)}\uFF1A${point.answeredCount} \u6B21\u9996\u6B21\u56DE\u7B54\uFF0C\u6B63\u786E\u7387 ${formatAccuracy(point.accuracy)}`);
+      column.createDiv({ cls: "quiz-trend-label", text: WEEK_DATE_FORMATTER.format(point.weekStart) });
+    }
+  }
+  renderWeakTopicTable(parent) {
+    const topics = this.analytics.topics.slice(0, 6);
+    if (topics.length === 0) {
+      parent.createEl("p", { cls: "quiz-muted-copy", text: "\u6682\u65E0\u4E3B\u9898\u7EDF\u8BA1\u3002" });
+      return;
+    }
+    for (const topic of topics) {
+      const button = parent.createEl("button", {
+        cls: "quiz-topic-stat-row",
+        attr: { type: "button", "data-action": "select-topic", "data-topic": topic.path }
+      });
+      button.createSpan({ text: topic.label });
+      button.createEl("strong", { text: `${topic.wrongQuestionCount} \xB7 ${formatAccuracy(topic.accuracy)}` });
+    }
+  }
+  renderSectionHeading(parent, title, detail) {
+    const heading = parent.createDiv({ cls: "quiz-dashboard-section-heading" });
+    heading.createEl("h2", { text: title });
+    heading.createEl("p", { text: detail });
+  }
+  renderCatalogWarnings(parent) {
+    if (this.catalog.errors.length === 0) return;
+    const warning = parent.createEl("details", { cls: "quiz-catalog-warning" });
+    warning.createEl("summary", { text: `${this.catalog.errors.length} \u4E2A Quiz block \u672A\u80FD\u52A0\u5165\u7D22\u5F15` });
+    const list = warning.createEl("ul");
+    for (const error of this.catalog.errors.slice(0, 20)) {
+      list.createEl("li", { text: `${error.filePath} \xB7 \u7B2C ${error.blockIndex} \u4E2A\uFF1A${error.message}` });
+    }
+  }
+};
+
+// src/navigation.ts
+var QuizFocusCoordinator = class {
+  pending = null;
+  listeners = /* @__PURE__ */ new Set();
+  request(target) {
+    this.pending = target;
+    this.deliver(target);
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    if (this.pending) this.deliver(this.pending);
+    return () => this.listeners.delete(listener);
+  }
+  deliver(target) {
+    let handled = false;
+    for (const listener of this.listeners) {
+      if (listener(target)) handled = true;
+    }
+    if (handled && this.pending === target) this.pending = null;
   }
 };
 
@@ -843,12 +1281,13 @@ function cloneAnswer(answer) {
   return Array.isArray(answer) ? [...answer] : answer;
 }
 var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
-  constructor(containerEl, quiz, quizKey, filePath, storage) {
+  constructor(containerEl, quiz, quizKey, filePath, storage, focusCoordinator) {
     super(containerEl);
     this.quiz = quiz;
     this.quizKey = quizKey;
     this.filePath = filePath;
     this.storage = storage;
+    this.focusCoordinator = focusCoordinator;
     this.sessionId = storage.getOrCreateCurrentSession(
       quizKey,
       quiz.id,
@@ -859,6 +1298,7 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
   quizKey;
   filePath;
   storage;
+  focusCoordinator;
   drafts = /* @__PURE__ */ new Map();
   editing = /* @__PURE__ */ new Set();
   pending = /* @__PURE__ */ new Set();
@@ -866,6 +1306,7 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
   sessionId;
   sessionActionPending = false;
   saveError = null;
+  focusedQuestionId = null;
   onload() {
     this.registerDomEvent(this.containerEl, "change", (event) => {
       this.handleChange(event);
@@ -877,6 +1318,9 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
       this.handleClick(event);
     });
     this.render();
+    this.register(
+      this.focusCoordinator.subscribe((target) => this.handleFocusRequest(target))
+    );
   }
   getInput(event) {
     const inputType = this.containerEl.ownerDocument.defaultView?.HTMLInputElement;
@@ -928,6 +1372,44 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
       void this.complete();
     } else if (action === "restart") {
       void this.restart();
+    } else if (action === "review" && questionId) {
+      void this.reviewQuestion(questionId);
+    }
+  }
+  handleFocusRequest(target) {
+    if (target.filePath !== this.filePath || target.quizId !== this.quiz.id) {
+      return false;
+    }
+    if (!this.quiz.questions.some((question) => question.id === target.questionId)) {
+      return false;
+    }
+    this.focusedQuestionId = target.questionId;
+    this.render();
+    this.focusQuestion(target.questionId);
+    return true;
+  }
+  focusQuestion(questionId) {
+    const questionEl = [...this.containerEl.querySelectorAll(
+      ".quiz-question[data-question-id]"
+    )].find((element) => element.dataset.questionId === questionId);
+    if (!questionEl) return;
+    const viewWindow = this.containerEl.ownerDocument.defaultView;
+    const reduceMotion = viewWindow?.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+    questionEl.addClass("is-navigation-target");
+    questionEl.scrollIntoView({
+      block: "center",
+      behavior: reduceMotion ? "auto" : "smooth"
+    });
+    questionEl.querySelector(
+      'button[data-action="retry"], button[data-action="review"], input:not(:disabled), button[data-action="submit"]'
+    )?.focus({ preventScroll: true });
+    if (viewWindow) {
+      const timer = viewWindow.setTimeout(() => {
+        questionEl.removeClass("is-navigation-target");
+      }, 2200);
+      this.register(() => viewWindow.clearTimeout(timer));
     }
   }
   retry(questionId) {
@@ -990,6 +1472,12 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
     }
   }
   async restart() {
+    await this.startNewSession();
+  }
+  async reviewQuestion(questionId) {
+    await this.startNewSession(questionId);
+  }
+  async startNewSession(questionId) {
     if (this.sessionActionPending) return;
     this.sessionActionPending = true;
     this.saveError = null;
@@ -1002,7 +1490,9 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
     this.drafts.clear();
     this.editing.clear();
     this.submittedThisSession.clear();
+    this.focusedQuestionId = questionId ?? null;
     this.render();
+    if (questionId) this.focusQuestion(questionId);
     try {
       await result.persisted;
     } catch (error) {
@@ -1011,6 +1501,7 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
     } finally {
       this.sessionActionPending = false;
       this.render();
+      if (questionId) this.focusQuestion(questionId);
     }
   }
   render() {
@@ -1069,7 +1560,10 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
     const isPending = this.pending.has(question.id);
     const isLocked = Boolean(saved) && !isEditing || isCompleted;
     const answer = isEditing ? this.drafts.get(question.id) ?? saved?.answer : saved?.answer ?? this.drafts.get(question.id);
-    const questionEl = this.containerEl.createDiv({ cls: "quiz-question" });
+    const questionEl = this.containerEl.createDiv({
+      cls: "quiz-question",
+      attr: { "data-question-id": question.id }
+    });
     const heading = questionEl.createDiv({ cls: "quiz-question-heading" });
     heading.createEl("h4", {
       cls: "quiz-question-title",
@@ -1113,6 +1607,16 @@ var QuizRenderer = class extends import_obsidian2.MarkdownRenderChild {
           }
         });
         retry.disabled = isPending;
+      } else if (this.focusedQuestionId === question.id) {
+        questionEl.createEl("button", {
+          cls: "quiz-retry",
+          text: "\u91CD\u505A\u6B64\u9898",
+          attr: {
+            type: "button",
+            "data-action": "review",
+            "data-question-id": question.id
+          }
+        });
       }
     } else if (!isCompleted) {
       const submit = questionEl.createEl("button", {
@@ -1521,9 +2025,10 @@ var OmniQuizPlugin = class extends import_obsidian3.Plugin {
     const storage = new QuizStorage(data, async (nextData) => {
       await this.saveData(nextData);
     });
+    const focusCoordinator = new QuizFocusCoordinator();
     this.registerView(
       QUIZ_DASHBOARD_VIEW,
-      (leaf) => new QuizDashboardView(leaf, storage)
+      (leaf) => new QuizDashboardView(leaf, storage, focusCoordinator)
     );
     this.addRibbonIcon("bar-chart-3", "\u6253\u5F00\u6D4B\u8BD5\u9762\u677F", () => {
       void this.activateDashboard();
@@ -1550,7 +2055,14 @@ var OmniQuizPlugin = class extends import_obsidian3.Plugin {
           const quiz = parseQuiz(source);
           const quizKey = `${ctx.sourcePath}::${quiz.id}`;
           ctx.addChild(
-            new QuizRenderer(el, quiz, quizKey, ctx.sourcePath, storage)
+            new QuizRenderer(
+              el,
+              quiz,
+              quizKey,
+              ctx.sourcePath,
+              storage,
+              focusCoordinator
+            )
           );
         } catch (error) {
           const message = error instanceof QuizParseError ? error.message : "Quiz \u683C\u5F0F\u9519\u8BEF";

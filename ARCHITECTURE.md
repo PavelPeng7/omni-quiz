@@ -74,8 +74,10 @@ The renderer must not parse raw JSON, directly call `Plugin.saveData`, or implem
 ### Dashboard surface
 
 - `src/catalog.ts` reads Markdown files and extracts valid Quiz blocks. A malformed block becomes a catalog warning rather than aborting the entire Vault scan.
-- `src/analytics.ts` is a pure aggregation layer over catalog entries and histories. It calculates first-attempt accuracy, cognitive-level distribution, question-type distribution, current progress, and activity.
+- `src/analytics.ts` is a pure aggregation layer over catalog entries and histories. It calculates first-attempt accuracy, unresolved wrong questions, hierarchical topic summaries, eight-week trends, cognitive-level distribution, question-type distribution, current progress, and activity.
+- `src/library.ts` applies pure dashboard search, topic/mode/state filters, and ordering to catalog entries.
 - `src/dashboard.ts` is an Obsidian `ItemView`. It renders metrics, native progress visualizations, search/filter controls, warnings, and navigation to source notes. Vault changes are debounced before rescanning.
+- `src/navigation.ts` is an in-memory coordinator that delivers a requested Quiz/question target to a matching inline renderer without writing navigation state to plugin data.
 
 Dependency direction:
 
@@ -148,6 +150,7 @@ Obsidian loads:
 - `manifest.json` currently declares `isDesktopOnly: false`; all runtime changes must remain mobile-compatible.
 - Obsidian UI may run in popout windows. DOM constructors and timers must come from the owning document/window.
 - All visual styles must use Obsidian theme variables and remain scoped to plugin roots.
+- Dashboard topics come from Obsidian note tags through the metadata cache; nested tags contribute to each parent topic and do not alter Quiz Schema v2.
 - Vault scans are read-only. Only `Plugin.saveData` writes learning history.
 - The dashboard shows at most 100 filtered cards at once; catalog indexing still scans all Markdown files.
 

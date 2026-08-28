@@ -64,13 +64,18 @@ The dashboard must:
 
 - index all valid fenced `quiz` blocks in Markdown files;
 - isolate malformed files/blocks and show actionable warnings;
+- prioritize unresolved wrong answers and navigate back to their inline questions;
+- build a hierarchical topic index from each source note's Obsidian tags;
 - show Quiz count, question count, attempted Quiz count, completed sessions, and first-attempt accuracy;
 - visualize L1–L4 accuracy and question-type distribution without a chart dependency;
-- support title, Quiz ID, and path search plus mode filtering;
+- visualize first-attempt answer volume and accuracy for the current and seven prior local calendar weeks;
+- support title, Quiz ID, path, and topic search plus mode, topic, and learning-state filtering;
 - show current progress, completion count, first-attempt accuracy, and recent activity per Quiz;
 - open the source note from a result;
 - refresh after persisted answers and debounced Vault changes;
 - remain usable with keyboard, mobile touch targets, light/dark themes, and popout windows.
+
+An unresolved wrong answer is a current catalog question whose latest attempt across all sessions is incorrect. Unanswered questions do not enter the wrong-answer index, and a later correct attempt removes the question from it. Topics are read from note metadata at scan time and are never persisted as progress or copied into Quiz Markdown.
 
 ## Content and persistence rules
 

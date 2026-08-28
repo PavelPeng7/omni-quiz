@@ -1,4 +1,4 @@
-import type { App } from "obsidian";
+import type { App, TFile } from "obsidian";
 import { parseQuiz, QuizParseError } from "./parser";
 import type { QuizData } from "./types";
 
@@ -6,6 +6,7 @@ export interface QuizCatalogEntry {
 	quizKey: string;
 	filePath: string;
 	blockIndex: number;
+	topics: string[];
 	quiz: QuizData;
 }
 
@@ -22,9 +23,25 @@ export interface QuizCatalog {
 
 const QUIZ_BLOCK_PATTERN = /^```quiz[\t ]*\r?\n([\s\S]*?)^```[\t ]*$/gm;
 
+export function normalizeTopicTags(tags: readonly string[]): string[] {
+	const normalized = new Set<string>();
+	for (const tag of tags) {
+		const topic = tag
+			.trim()
+			.replace(/^#+/, "")
+			.split("/")
+			.map((segment) => segment.trim())
+			.filter(Boolean)
+			.join("/");
+		if (topic) normalized.add(topic);
+	}
+	return [...normalized].sort((left, right) => left.localeCompare(right));
+}
+
 export function extractQuizCatalog(
 	filePath: string,
 	markdown: string,
+	topics: readonly string[] = [],
 ): QuizCatalog {
 	const entries: QuizCatalogEntry[] = [];
 	const errors: QuizCatalogError[] = [];
@@ -38,6 +55,7 @@ export function extractQuizCatalog(
 				quizKey: `${filePath}::${quiz.id}`,
 				filePath,
 				blockIndex,
+				topics: normalizeTopicTags(topics),
 				quiz,
 			});
 		} catch (error) {
@@ -52,7 +70,10 @@ export function extractQuizCatalog(
 	return { entries, errors };
 }
 
-export async function scanQuizCatalog(app: App): Promise<QuizCatalog> {
+export async function scanQuizCatalog(
+	app: App,
+	getTopics: (file: TFile) => readonly string[],
+): Promise<QuizCatalog> {
 	const entries: QuizCatalogEntry[] = [];
 	const errors: QuizCatalogError[] = [];
 	const seenKeys = new Set<string>();
@@ -69,7 +90,7 @@ export async function scanQuizCatalog(app: App): Promise<QuizCatalog> {
 			});
 			continue;
 		}
-		const result = extractQuizCatalog(file.path, source);
+		const result = extractQuizCatalog(file.path, source, getTopics(file));
 		for (const entry of result.entries) {
 			if (seenKeys.has(entry.quizKey)) {
 				errors.push({

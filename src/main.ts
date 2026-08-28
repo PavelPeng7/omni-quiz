@@ -1,5 +1,6 @@
 import { Plugin, TFile } from "obsidian";
 import { QUIZ_DASHBOARD_VIEW, QuizDashboardView } from "./dashboard";
+import { QuizFocusCoordinator } from "./navigation";
 import { parseQuiz, QuizParseError } from "./parser";
 import { QuizRenderer } from "./renderer";
 import { normalizePluginData, QuizStorage } from "./storage";
@@ -10,10 +11,11 @@ export default class OmniQuizPlugin extends Plugin {
 		const storage = new QuizStorage(data, async (nextData) => {
 			await this.saveData(nextData);
 		});
+		const focusCoordinator = new QuizFocusCoordinator();
 
 		this.registerView(
 			QUIZ_DASHBOARD_VIEW,
-			(leaf) => new QuizDashboardView(leaf, storage),
+			(leaf) => new QuizDashboardView(leaf, storage, focusCoordinator),
 		);
 		this.addRibbonIcon("bar-chart-3", "打开测试面板", () => {
 			void this.activateDashboard();
@@ -41,7 +43,14 @@ export default class OmniQuizPlugin extends Plugin {
 					const quiz = parseQuiz(source);
 					const quizKey = `${ctx.sourcePath}::${quiz.id}`;
 					ctx.addChild(
-						new QuizRenderer(el, quiz, quizKey, ctx.sourcePath, storage),
+						new QuizRenderer(
+							el,
+							quiz,
+							quizKey,
+							ctx.sourcePath,
+							storage,
+							focusCoordinator,
+						),
 					);
 				} catch (error) {
 					const message =
